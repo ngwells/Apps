@@ -94,13 +94,14 @@ from mistralai import Mistral
 
 app = Flask(__name__)
 
-# Initialize Mistral API client
-client = Mistral(api_key="nmCC6YdwpUvKpTePlQVyTASyEc07AI9a")
+import os
+client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+
 
 
 def ask_mistral(prompt):
     response = client.chat.complete(
-        model="mistral-large-latest",
+        model="mistral-small-latest",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
@@ -131,4 +132,5 @@ def home():
     """
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
