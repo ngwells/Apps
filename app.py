@@ -100,10 +100,10 @@ client = Mistral(api_key="nmCC6YdwpUvKpTePlQVyTASyEc07AI9a")
 
 def ask_mistral(prompt):
     response = client.chat.complete(
-        model="mistral-small-latest",
+        model="mistral-large-latest",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message["content"]
+    return response.choices[0].message.content
 
 @app.route("/", methods=["GET", "POST"])
 def home():
