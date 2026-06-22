@@ -1,22 +1,49 @@
-from flask import Flask, Response, render_template_string
 import requests
+from flask import Flask, Response, render_template_string
+import time
 
 app = Flask(__name__)
 
 # XBotGo API endpoint that returns JSON with a fresh playUrl
 PLAY_API_URL = "https://cloud.xbotgo.net/api/core/api/live/room/user/task/play/US/23459"
 
+# Browser spoofing headers (critical for XBotGo)
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept": "*/*",
+    "Connection": "keep-alive",
+    "Referer": "",
+    "Origin": ""
+}
 
-def get_latest_play_url():
+
+def get_latest_play_url(retries=3, delay=1):
     """
     Calls the XBotGo API and extracts the latest HLS playUrl.
+    Includes retry logic and logging.
     """
-    r = requests.get(PLAY_API_URL, timeout=5)
-    r.raise_for_status()
-    data = r.json()
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"[INFO] Fetching playUrl (attempt {attempt})")
+            r = requests.get(PLAY_API_URL, headers=BROWSER_HEADERS, timeout=5)
+            r.raise_for_status()
+            data = r.json()
 
-    # Adjust this if your JSON structure differs
-    return data["data"]["playUrl"]
+            print("[DEBUG] API JSON:", data)
+
+            # Adjust this if your JSON structure differs
+            play_url = data["data"]["playUrl"]
+
+            if play_url:
+                print(f"[INFO] Got playUrl: {play_url}")
+                return play_url
+
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch playUrl: {e}")
+
+        time.sleep(delay)
+
+    raise RuntimeError("Unable to fetch playUrl after retries")
 
 
 @app.route("/")
@@ -56,13 +83,17 @@ def index():
             const video = document.getElementById("video");
             const streamURL = "/stream.m3u8";
 
-            if (Hls.isSupported()) {
-                const hls = new Hls();
-                hls.loadSource(streamURL);
-                hls.attachMedia(video);
-            } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-                video.src = streamURL;
+            function loadStream() {
+                if (Hls.isSupported()) {
+                    const hls = new Hls({ maxBufferLength: 10 });
+                    hls.loadSource(streamURL);
+                    hls.attachMedia(video);
+                } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+                    video.src = streamURL;
+                }
             }
+
+            loadStream();
         </script>
     </body>
     </html>
@@ -73,17 +104,30 @@ def index():
 @app.route("/stream.m3u8")
 def stream():
     """
-    Proxies the XBotGo HLS playlist with CORS headers.
-    This keeps GitHub Pages and browsers happy.
+    Proxies the XBotGo HLS playlist with:
+    - Browser spoofing headers
+    - Auto-refreshing playUrl
+    - Retry logic
+    - CORS headers
     """
     try:
         play_url = get_latest_play_url()
-        upstream = requests.get(play_url, stream=True, timeout=10)
-    except Exception as e:
-        return Response(f"Proxy error: {e}", status=500)
+        print(f"[INFO] Proxying stream from: {play_url}")
 
-    if not upstream.ok:
-        return Response("Upstream error", status=upstream.status_code)
+        upstream = requests.get(
+            play_url,
+            headers=BROWSER_HEADERS,
+            stream=True,
+            timeout=10
+        )
+
+        if not upstream.ok:
+            print(f"[ERROR] Upstream error: {upstream.status_code}")
+            return Response("Upstream error", status=upstream.status_code)
+
+    except Exception as e:
+        print(f"[ERROR] Proxy error: {e}")
+        return Response(f"Proxy error: {e}", status=500)
 
     def generate():
         for chunk in upstream.iter_content(chunk_size=8192):
