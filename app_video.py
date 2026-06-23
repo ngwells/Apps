@@ -1,46 +1,36 @@
-from flask import Flask, Response
+from flask import Flask, request, Response
 import requests
+from requests.exceptions import HTTPError
 
 app = Flask(__name__)
 
-# This is the permanent API link that provides the fresh .m3u8 streams
-XBOTGO_API_URL = "https://cloud.xbotgo.net/api/core/api/live/room/user/task/play/US/23459"
-
 @app.route('/stream.m3u8')
 def proxy_stream():
-    print("[INFO] Step 1: Querying XbotGo API for the live stream link...")
+    # 1. Dynamically grab the target XbotGo stream link from the query parameter
+    target_url = request.args.get('url')
     
+    if not target_url:
+        return "Error: Missing required 'url' parameter. Usage: /stream.m3u8?url=YOUR_XBOTGO_URL", 400
+        
+    print(f"[INFO] Dynamically proxying stream request for: {target_url}")
+    
+    # 2. Safely attempt to fetch the raw playlist text from the remote media server
     try:
-        # 1. Hit the API to get the dynamic stream data
-        api_response = requests.get(XBOTGO_API_URL, timeout=10)
-        api_response.raise_for_status()
+        # A 10-second timeout prevents Gunicorn workers from hanging infinitely
+        response = requests.get(target_url, timeout=10)
         
-        api_data = api_response.json()
+        # This catches 500, 403, and 404 errors immediately instead of choking
+        response.raise_for_status() 
         
-        # 2. Extract the actual dynamic .m3u8 URL from the response payload
-        real_stream_url = api_data.get('data', {}).get('playUrl')
+        # 3. Return the raw .m3u8 text playlist with the proper streaming MIME type
+        return Response(response.text, mimetype='application/x-mpegURL')
         
-        if not real_stream_url:
-            print(f"[WARN] API worked, but no active stream found. Response: {api_data}")
-            return "No active live stream found. Make sure the gimbal is broadcasting.", 503
-
-        print(f"[INFO] Step 2: Extract successful! Fetching stream from: {real_stream_url}")
-
-        # 3. Fetch the actual .m3u8 playlist file using the dynamic token
-        stream_response = requests.get(real_stream_url, timeout=10)
-        stream_response.raise_for_status()
+    except HTTPError as http_err:
+        print(f"[ERROR] XbotGo remote media server returned an error: {http_err}")
+        return "Streaming provider is currently unavailable (Expired link or stream ended)", 502
         
-        # 4. Pass the playlist text straight through to your platform video player
-        return Response(stream_response.text, mimetype='application/x-mpegURL')
-        
-    except requests.exceptions.HTTPError as http_err:
-        print(f"[ERROR] HTTP Error occurred: {http_err}")
-        return "Streaming server error (Gimbal might be offline).", 502
-    except ValueError:
-        print("[ERROR] Failed to parse JSON from the XbotGo API.")
-        return "Invalid response structure from backend.", 502
-    except Exception as e:
-        print(f"[ERROR] Unexpected proxy error: {str(e)}")
+    except Exception as err:
+        print(f"[ERROR] Unexpected error fetching playlist: {err}")
         return "Internal video proxy error", 500
 
 if __name__ == '__main__':
