@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 CSV_FILE = "voice_data.csv"
 
-# Initialize Mistral Client
+# Initialize Mistral Client from environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
@@ -185,13 +185,13 @@ def process_audio():
     audio_file.save(temp_filename)
     
     try:
-        # Call Mistral's transcription model
+        # Utilizing correct v2 SDK client formatting and voxtral-mini-latest model
         with open(temp_filename, "rb") as f:
-            transcription_response = client.audio.transcribe(
-                model="mistral-embed",  # Note: Swap to 'mistral-large' or preferred speech endpoint if applicable
+            transcription_response = client.audio.transcriptions.complete(
+                model="voxtral-mini-latest",
                 file={
-                    "file": f.read(),
-                    "filename": temp_filename
+                    "content": f.read(),
+                    "file_name": temp_filename
                 }
             )
         detected_text = transcription_response.text.strip()
