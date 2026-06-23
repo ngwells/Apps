@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template_string
+from mistralai.client import Mistral
 import pandas as pd
 import datetime
 import os
@@ -6,6 +7,10 @@ import os
 app = Flask(__name__)
 
 CSV_FILE = "voice_data.csv"
+
+# Initialize Mistral Client
+API_KEY = os.environ.get("MISTRAL_API_KEY")
+client = Mistral(api_key=API_KEY) if API_KEY else None
 
 def save_to_dataframe(text):
     """Appends the transcript and a timestamp to a CSV file/DataFrame and returns all rows."""
@@ -17,7 +22,6 @@ def save_to_dataframe(text):
     else:
         new_data.to_csv(CSV_FILE, index=False)
     
-    # Read the updated file to return full history
     df = pd.read_csv(CSV_FILE)
     return df.to_dict(orient="records")
 
@@ -82,14 +86,12 @@ HTML_INTERFACE = """
     const statusDiv = document.getElementById('status');
     const historyList = document.getElementById('history-list');
 
-    // Function to render rows into the UI list
     function updateHistoryDOM(records) {
         historyList.innerHTML = ""; 
         if (records.length === 0) {
             historyList.innerHTML = '<li class="history-item" style="color: #aaa; text-align:center;">No recordings logged yet.</li>';
             return;
         }
-        // Loop backwards to show newest logs on top
         records.slice().reverse().forEach(row => {
             const li = document.createElement('li');
             li.className = 'history-item';
@@ -98,7 +100,6 @@ HTML_INTERFACE = """
         });
     }
 
-    // Load initial history when page loads
     const initialHistory = {{ initial_history | tojson }};
     updateHistoryDOM(initialHistory);
 
@@ -115,11 +116,11 @@ HTML_INTERFACE = """
             };
 
             mediaRecorder.onstop = async () => {
-                statusDiv.innerText = "Status: Processing audio and adding row...";
-                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                statusDiv.innerText = "Status: Sending audio to Mistral for transcription...";
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                 
                 const formData = new FormData();
-                formData.append('audio_data', audioBlob);
+                formData.append('audio_data', audioBlob, 'recording.webm');
 
                 fetch('/process-audio', {
                     method: 'POST',
@@ -129,8 +130,7 @@ HTML_INTERFACE = """
                 .then(data => {
                     if (data.status === 'success') {
                         statusDiv.style.color = 'green';
-                        statusDiv.innerText = "Row added successfully!";
-                        // Update UI with the new full dataframe history
+                        statusDiv.innerText = "Transcribed and added successfully!";
                         updateHistoryDOM(data.history);
                     } else {
                         statusDiv.style.color = 'red';
@@ -167,20 +167,47 @@ HTML_INTERFACE = """
 
 @app.route("/")
 def index():
-    # Pass existing items to display on full page load
     history = get_all_records()
     return render_template_string(HTML_INTERFACE, initial_history=history)
 
 @app.route("/process-audio", methods=["POST"])
 def process_audio():
+    if not client:
+        return jsonify({"status": "error", "message": "Mistral API key missing from environment variables."}), 500
+
     if 'audio_data' not in request.files:
         return jsonify({"status": "error", "message": "No audio data received"}), 400
         
     audio_file = request.files['audio_data']
     
-    # Placeholder: Replace this string with actual transcription engines (e.g., OpenAI Whisper API, etc.)
-    detected_text = "Sample transcript from recorded audio file" 
+    # Save file temporarily to disk to pass to the SDK
+    temp_filename = "temp_recording.webm"
+    audio_file.save(temp_filename)
     
+    try:
+        # Call Mistral's transcription model
+        with open(temp_filename, "rb") as f:
+            transcription_response = client.audio.transcribe(
+                model="mistral-embed",  # Note: Swap to 'mistral-large' or preferred speech endpoint if applicable
+                file={
+                    "file": f.read(),
+                    "filename": temp_filename
+                }
+            )
+        detected_text = transcription_response.text.strip()
+        
+    except Exception as e:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+        return jsonify({"status": "error", "message": f"Transcription failed: {str(e)}"}), 500
+
+    # Clean up file
+    if os.path.exists(temp_filename):
+        os.remove(temp_filename)
+
+    if not detected_text:
+        detected_text = "[Unintelligible audio recorded]"
+
     # Saves row to CSV and returns full updated contents
     updated_history = save_to_dataframe(detected_text)
     
