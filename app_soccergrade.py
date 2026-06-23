@@ -6,24 +6,11 @@ import os
 
 app = Flask(__name__)
 
-# This will create and append to a CSV file right inside your local machine's folder
-LOCAL_CSV_FILE = "local_voice_history.csv"
-
 # Initialize Mistral Client from environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-def save_to_local_directory(text):
-    """Appends the transcript and a timestamp to a local CSV file on your machine."""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_data = pd.DataFrame([{"Timestamp": timestamp, "Transcript": text}])
-    
-    if os.path.exists(LOCAL_CSV_FILE):
-        new_data.to_csv(LOCAL_CSV_FILE, mode='a', header=False, index=False)
-    else:
-        new_data.to_csv(LOCAL_CSV_FILE, index=False)
-
-# Embedded HTML: Starts with a completely empty history on fresh page load (Option 1)
+# Embedded HTML with dynamic session list and Local CSV download functionality
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -39,6 +26,8 @@ HTML_INTERFACE = """
         .btn-record:hover { background: #bd2130; }
         .btn-stop { background: #28a745; color: white; }
         .btn-stop:hover { background: #218838; }
+        .btn-save { background: #007bff; color: white; }
+        .btn-save:hover { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
         #status { margin: 20px 0; font-weight: bold; color: #555; }
         
@@ -52,10 +41,11 @@ HTML_INTERFACE = """
 <body>
 <div class="container">
     <h1>Voice Recorder Logger</h1>
-    <p>Click "Start Recording" to open your mic, and "Stop & Process" to transcribe your speech.</p>
+    <p>Click "Start Recording" to open your mic, and "Stop & Process" to transcribe.</p>
     
     <button id="start-btn" class="btn-record">Start Recording</button>
     <button id="stop-btn" class="btn-stop" disabled>Stop & Process</button>
+    <button id="export-btn" class="btn-save" disabled>Export Session CSV</button>
     
     <div id="status">Status: Idle</div>
 
@@ -72,23 +62,66 @@ HTML_INTERFACE = """
     let audioChunks = [];
     const startBtn = document.getElementById('start-btn');
     const stopBtn = document.getElementById('stop-btn');
+    const exportBtn = document.getElementById('export-btn');
     const statusDiv = document.getElementById('status');
     const historyList = document.getElementById('history-list');
     
-    // Array to manage rows just for the active session in this browser window
+    // In-memory array to store rows for the export function
     let sessionRecords = [];
 
     function appendToSessionDOM(timestamp, transcript) {
         const emptyState = document.getElementById('empty-state');
         if (emptyState) emptyState.remove();
 
+        // Push data to memory list for csv compilation
+        sessionRecords.push({ timestamp, transcript });
+        exportBtn.disabled = false; // Enable export button
+
         const li = document.createElement('li');
         li.className = 'history-item';
         li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
         
-        // Inserts the newest transcription at the top of the browser list view
+        // Inserts the newest transcription at the top of the browser view list
         historyList.insertBefore(li, historyList.firstChild);
     }
+
+    // Function to let the user select their local directory and save the file
+    exportBtn.addEventListener('click', async () => {
+        if (sessionRecords.length === 0) return;
+
+        // Build CSV string layout
+        let csvContent = "Timestamp,Transcript\\n";
+        sessionRecords.forEach(row => {
+            // Escape double quotes inside the text
+            let cleanTranscript = row.transcript.replace(/"/g, '""');
+            csvContent += `"${row.timestamp}","${cleanTranscript}"\\n`;
+        });
+
+        try {
+            // Opens native file system save-as browser prompt dialog layout window
+            const options = {
+                suggestedName: 'voice_history.csv',
+                types: [{
+                    description: 'CSV Files',
+                    accept: { 'text/csv': ['.csv'] },
+                }],
+            };
+            
+            const handle = await window.showSaveFilePicker(options);
+            const writable = await handle.createWritable();
+            await writable.write(csvContent);
+            await writable.close();
+            
+            statusDiv.style.color = 'green';
+            statusDiv.innerText = "Status: File saved successfully to your selected directory!";
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                statusDiv.style.color = 'red';
+                statusDiv.innerText = `Export failed: ${err.message}`;
+                console.error(err);
+            }
+        }
+    });
 
     startBtn.addEventListener('click', async () => {
         audioChunks = [];
@@ -118,8 +151,7 @@ HTML_INTERFACE = """
                 .then(data => {
                     if (data.status === 'success') {
                         statusDiv.style.color = 'green';
-                        statusDiv.innerText = "Transcribed and saved locally!";
-                        // Add to browser UI interface instantly
+                        statusDiv.innerText = "Transcribed successfully!";
                         appendToSessionDOM(data.timestamp, data.transcript);
                     } else {
                         statusDiv.style.color = 'red';
@@ -156,7 +188,6 @@ HTML_INTERFACE = """
 
 @app.route("/")
 def index():
-    # Option 1 behavior: returns a fresh interface without loading any global server history
     return render_template_string(HTML_INTERFACE)
 
 @app.route("/process-audio", methods=["POST"])
@@ -193,11 +224,7 @@ def process_audio():
     if not detected_text:
         detected_text = "[Unintelligible audio recorded]"
 
-    # Capture the current execution timestamp
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Save to your computer's local log layout directory file
-    save_to_local_directory(detected_text)
     
     return jsonify({
         "status": "success", 
