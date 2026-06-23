@@ -10,7 +10,7 @@ app = Flask(__name__)
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-# Embedded HTML with dynamic session list and Local CSV download functionality
+# Embedded HTML with dynamic session list and Cross-Platform CSV export functionality
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -66,60 +66,81 @@ HTML_INTERFACE = """
     const statusDiv = document.getElementById('status');
     const historyList = document.getElementById('history-list');
     
-    // In-memory array to store rows for the export function
     let sessionRecords = [];
 
     function appendToSessionDOM(timestamp, transcript) {
         const emptyState = document.getElementById('empty-state');
         if (emptyState) emptyState.remove();
 
-        // Push data to memory list for csv compilation
         sessionRecords.push({ timestamp, transcript });
-        exportBtn.disabled = false; // Enable export button
+        exportBtn.disabled = false;
 
         const li = document.createElement('li');
         li.className = 'history-item';
         li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
-        
-        // Inserts the newest transcription at the top of the browser view list
         historyList.insertBefore(li, historyList.firstChild);
     }
 
-    // Function to let the user select their local directory and save the file
+    // Export handler that adapts smoothly to iOS / iPhones
     exportBtn.addEventListener('click', async () => {
         if (sessionRecords.length === 0) return;
 
-        // Build CSV string layout
+        // Compile CSV layout string
         let csvContent = "Timestamp,Transcript\\n";
         sessionRecords.forEach(row => {
-            // Escape double quotes inside the text
             let cleanTranscript = row.transcript.replace(/"/g, '""');
             csvContent += `"${row.timestamp}","${cleanTranscript}"\\n`;
         });
 
-        try {
-            // Opens native file system save-as browser prompt dialog layout window
-            const options = {
-                suggestedName: 'voice_history.csv',
-                types: [{
-                    description: 'CSV Files',
-                    accept: { 'text/csv': ['.csv'] },
-                }],
-            };
-            
-            const handle = await window.showSaveFilePicker(options);
-            const writable = await handle.createWritable();
-            await writable.write(csvContent);
-            await writable.close();
-            
-            statusDiv.style.color = 'green';
-            statusDiv.innerText = "Status: File saved successfully to your selected directory!";
-        } catch (err) {
-            if (err.name !== 'AbortError') {
-                statusDiv.style.color = 'red';
-                statusDiv.innerText = `Export failed: ${err.message}`;
-                console.error(err);
+        const filename = 'voice_history.csv';
+
+        // Check if the modern directory picker is supported (Desktops)
+        if ('showSaveFilePicker' in window) {
+            try {
+                const options = {
+                    suggestedName: filename,
+                    types: [{
+                        description: 'CSV Files',
+                        accept: { 'text/csv': ['.csv'] },
+                    }],
+                };
+                const handle = await window.showSaveFilePicker(options);
+                const writable = await handle.createWritable();
+                await writable.write(csvContent);
+                await writable.close();
+                
+                statusDiv.style.color = 'green';
+                statusDiv.innerText = "Status: File saved successfully!";
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return; // User canceled
+                console.warn("File Picker failed, falling back to blob layout download:", err);
             }
+        }
+
+        // FALLBACK FOR IPHONE / IPAD / SAFARI
+        try {
+            statusDiv.style.color = '#555';
+            statusDiv.innerText = "Status: Generating file download...";
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            
+            document.body.appendChild(link);
+            link.click(); // Triggers iOS native save/share prompt panel popup
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            statusDiv.style.color = 'green';
+            statusDiv.innerText = "Status: File downloaded to your device files!";
+        } catch (err) {
+            statusDiv.style.color = 'red';
+            statusDiv.innerText = `Export failed: ${err.message}`;
         }
     });
 
@@ -129,6 +150,8 @@ HTML_INTERFACE = """
         statusDiv.innerText = "Status: Requesting microphone access...";
         
         try {
+            // Note: iOS Safari requires audio/mp4 or audio/webm depending on version. 
+            // WebMediaRecorder handles standard stream extraction natively.
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder = new MediaRecorder(stream);
             
@@ -138,7 +161,7 @@ HTML_INTERFACE = """
 
             mediaRecorder.onstop = async () => {
                 statusDiv.innerText = "Status: Transcribing audio file...";
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
                 
                 const formData = new FormData();
                 formData.append('audio_data', audioBlob, 'recording.webm');
@@ -170,7 +193,8 @@ HTML_INTERFACE = """
             startBtn.disabled = true;
             stopBtn.disabled = false;
         } catch (err) {
-            statusDiv.innerText = "Status: Microphone access denied.";
+            statusDiv.style.color = 'red';
+            statusDiv.innerText = "Status: Microphone access denied or unsupported format.";
             console.error(err);
         }
     });
