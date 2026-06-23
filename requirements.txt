@@ -1,3 +1,3 @@
-flask==3.0.0
-gunicorn==21.2.0
-mistralai
+Flask==3.0.3
+gunicorn==22.0.0
+mistralai>=2.0.0
