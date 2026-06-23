@@ -6,36 +6,24 @@ import os
 
 app = Flask(__name__)
 
-CSV_FILE = "voice_data.csv"
+# This will create and append to a CSV file right inside your local machine's folder
+LOCAL_CSV_FILE = "local_voice_history.csv"
 
 # Initialize Mistral Client from environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-def save_to_dataframe(text):
-    """Appends the transcript and a timestamp to a CSV file/DataFrame and returns all rows."""
+def save_to_local_directory(text):
+    """Appends the transcript and a timestamp to a local CSV file on your machine."""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_data = pd.DataFrame([{"Timestamp": timestamp, "Transcript": text}])
     
-    if os.path.exists(CSV_FILE):
-        new_data.to_csv(CSV_FILE, mode='a', header=False, index=False)
+    if os.path.exists(LOCAL_CSV_FILE):
+        new_data.to_csv(LOCAL_CSV_FILE, mode='a', header=False, index=False)
     else:
-        new_data.to_csv(CSV_FILE, index=False)
-    
-    df = pd.read_csv(CSV_FILE)
-    return df.to_dict(orient="records")
+        new_data.to_csv(LOCAL_CSV_FILE, index=False)
 
-def get_all_records():
-    """Helper to fetch existing records if the page is refreshed."""
-    if os.path.exists(CSV_FILE):
-        try:
-            df = pd.read_csv(CSV_FILE)
-            return df.to_dict(orient="records")
-        except Exception:
-            return []
-    return []
-
-# Embedded HTML with dynamic list display
+# Embedded HTML: Starts with a completely empty history on fresh page load (Option 1)
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -64,7 +52,7 @@ HTML_INTERFACE = """
 <body>
 <div class="container">
     <h1>Voice Recorder Logger</h1>
-    <p>Click "Start Recording" to open your mic, and "Stop & Process" to append to the DataFrame.</p>
+    <p>Click "Start Recording" to open your mic, and "Stop & Process" to transcribe your speech.</p>
     
     <button id="start-btn" class="btn-record">Start Recording</button>
     <button id="stop-btn" class="btn-stop" disabled>Stop & Process</button>
@@ -72,9 +60,10 @@ HTML_INTERFACE = """
     <div id="status">Status: Idle</div>
 
     <div class="history-container">
-        <h3>Processed Text History:</h3>
+        <h3>Session Text History (Private to You):</h3>
         <ul id="history-list" class="history-list">
-            </ul>
+            <li class="history-item" id="empty-state" style="color: #aaa; text-align:center;">No recordings logged in this session yet.</li>
+        </ul>
     </div>
 </div>
 
@@ -85,26 +74,25 @@ HTML_INTERFACE = """
     const stopBtn = document.getElementById('stop-btn');
     const statusDiv = document.getElementById('status');
     const historyList = document.getElementById('history-list');
+    
+    // Array to manage rows just for the active session in this browser window
+    let sessionRecords = [];
 
-    function updateHistoryDOM(records) {
-        historyList.innerHTML = ""; 
-        if (records.length === 0) {
-            historyList.innerHTML = '<li class="history-item" style="color: #aaa; text-align:center;">No recordings logged yet.</li>';
-            return;
-        }
-        records.slice().reverse().forEach(row => {
-            const li = document.createElement('li');
-            li.className = 'history-item';
-            li.innerHTML = `<span class="timestamp">[${row.Timestamp}]</span> ${row.Transcript}`;
-            historyList.appendChild(li);
-        });
+    function appendToSessionDOM(timestamp, transcript) {
+        const emptyState = document.getElementById('empty-state');
+        if (emptyState) emptyState.remove();
+
+        const li = document.createElement('li');
+        li.className = 'history-item';
+        li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
+        
+        // Inserts the newest transcription at the top of the browser list view
+        historyList.insertBefore(li, historyList.firstChild);
     }
-
-    const initialHistory = {{ initial_history | tojson }};
-    updateHistoryDOM(initialHistory);
 
     startBtn.addEventListener('click', async () => {
         audioChunks = [];
+        statusDiv.style.color = '#555';
         statusDiv.innerText = "Status: Requesting microphone access...";
         
         try {
@@ -116,7 +104,7 @@ HTML_INTERFACE = """
             };
 
             mediaRecorder.onstop = async () => {
-                statusDiv.innerText = "Status: Sending audio to Mistral for transcription...";
+                statusDiv.innerText = "Status: Transcribing audio file...";
                 const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                 
                 const formData = new FormData();
@@ -130,8 +118,9 @@ HTML_INTERFACE = """
                 .then(data => {
                     if (data.status === 'success') {
                         statusDiv.style.color = 'green';
-                        statusDiv.innerText = "Transcribed and added successfully!";
-                        updateHistoryDOM(data.history);
+                        statusDiv.innerText = "Transcribed and saved locally!";
+                        // Add to browser UI interface instantly
+                        appendToSessionDOM(data.timestamp, data.transcript);
                     } else {
                         statusDiv.style.color = 'red';
                         statusDiv.innerText = `Error: ${data.message}`;
@@ -167,8 +156,8 @@ HTML_INTERFACE = """
 
 @app.route("/")
 def index():
-    history = get_all_records()
-    return render_template_string(HTML_INTERFACE, initial_history=history)
+    # Option 1 behavior: returns a fresh interface without loading any global server history
+    return render_template_string(HTML_INTERFACE)
 
 @app.route("/process-audio", methods=["POST"])
 def process_audio():
@@ -179,13 +168,10 @@ def process_audio():
         return jsonify({"status": "error", "message": "No audio data received"}), 400
         
     audio_file = request.files['audio_data']
-    
-    # Save file temporarily to disk to pass to the SDK
     temp_filename = "temp_recording.webm"
     audio_file.save(temp_filename)
     
     try:
-        # Utilizing correct v2 SDK client formatting and voxtral-mini-latest model
         with open(temp_filename, "rb") as f:
             transcription_response = client.audio.transcriptions.complete(
                 model="voxtral-mini-latest",
@@ -201,20 +187,22 @@ def process_audio():
             os.remove(temp_filename)
         return jsonify({"status": "error", "message": f"Transcription failed: {str(e)}"}), 500
 
-    # Clean up file
     if os.path.exists(temp_filename):
         os.remove(temp_filename)
 
     if not detected_text:
         detected_text = "[Unintelligible audio recorded]"
 
-    # Saves row to CSV and returns full updated contents
-    updated_history = save_to_dataframe(detected_text)
+    # Capture the current execution timestamp
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Save to your computer's local log layout directory file
+    save_to_local_directory(detected_text)
     
     return jsonify({
         "status": "success", 
         "transcript": detected_text,
-        "history": updated_history
+        "timestamp": current_time
     })
 
 if __name__ == "__main__":
