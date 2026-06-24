@@ -1,18 +1,66 @@
 import datetime
+import json
 import os
 import re
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, session
 from mistralai.client import Mistral
 import pandas as pd
 
 app = Flask(__name__)
+# Secret key required to use Flask encrypted client-side sessions
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
 # Initialize Mistral Client from environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-# Enhanced HTML with Split-Processing capabilities and dedicated download handlers
-HTML_INTERFACE = """
+# =====================================================================
+# SECTION 1: HTML INTERFACES (FRONTEND JAVASCRIPT & UI LAYOUTS)
+# =====================================================================
+
+# --- PAGE A: CENTRAL HUB LANDING PAGE ---
+LANDING_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Hub</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 60px auto; background: #f4f6f9; text-align: center; color: #333; }
+        h1 { margin-bottom: 10px; color: #222; }
+        .subtitle { color: #666; margin-bottom: 40px; font-size: 16px; font-weight: bold; }
+        .grid { display: flex; justify-content: center; gap: 30px; flex-wrap: wrap; padding: 0 20px; }
+        .card { background: white; width: 280px; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+        .card h3 { margin-top: 0; color: #007bff; font-size: 20px; }
+        .card p { color: #555; font-size: 14px; line-height: 1.5; min-height: 60px; }
+        .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 12px; padding: 4px 8px; border-radius: 4px; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Data & Voice Automation Suite</h1>
+    <p class="subtitle">Click one of the links below to launch an environment:</p>
+    
+    <div class="grid">
+        <a href="/soccer-grade" class="card">
+            <h3>1. Voice Logger</h3>
+            <p>Voice-to-text logging assistant featuring automated player-by-player row splitting and structured CSV exports.</p>
+            <span class="badge">Voice Input</span>
+        </a>
+
+        <a href="/upload-manager" class="card">
+            <h3>2. Data Upload Manager</h3>
+            <p>Upload external metrics data or spreadsheets and merge or inspect them with your recorded voice sessions.</p>
+            <span class="badge">File Processing</span>
+        </a>
+    </div>
+</body>
+</html>
+"""
+
+# --- PAGE B: VOICE RECORDER & ROWS SPLITTER INTERFACE ---
+SOCCER_INTERFACE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -21,6 +69,8 @@ HTML_INTERFACE = """
     <title>Audio Voice Logger</title>
     <style>
         body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        .back-nav { text-align: left; margin-bottom: 20px; }
+        .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
         .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         button { padding: 12px 24px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; border-radius: 25px; margin: 6px; transition: background 0.3s; }
         .btn-record { background: #dc3545; color: white; }
@@ -44,6 +94,9 @@ HTML_INTERFACE = """
     </style>
 </head>
 <body>
+    <div class="back-nav">
+        <a href="/" class="back-link">← Back to Hub</a>
+    </div>
     <div class="container">
         <h1>Voice Recorder Logger</h1>
         <p>Click "Start Recording" to open your mic, and "Stop & Process" to transcribe.</p>
@@ -107,14 +160,12 @@ HTML_INTERFACE = """
             historyList.insertBefore(li, historyList.firstChild);
         }
 
-        // 1. Process Button Client Handler
         processBtn.addEventListener('click', async () => {
             if (sessionRecords.length === 0) return;
-            statusDiv.style.color = '#555';
             statusDiv.innerText = "Status: Split-processing transcripts...";
             
             try {
-                const response = await fetch('/split-dataframe', {
+                const response = await fetch('/soccer-grade/split-dataframe', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ data: sessionRecords })
@@ -123,8 +174,6 @@ HTML_INTERFACE = """
                 
                 if (result.status === 'success') {
                     processedRecords = result.processed_data;
-                    
-                    // Refresh UI
                     processedList.innerHTML = '';
                     processedRecords.forEach(row => {
                         const li = document.createElement('li');
@@ -132,22 +181,16 @@ HTML_INTERFACE = """
                         li.innerHTML = `<span class="timestamp">[${row.Timestamp}]</span> ${row.Transcript}`;
                         processedList.appendChild(li);
                     });
-                    
                     exportProcessedBtn.disabled = false;
                     statusDiv.style.color = 'green';
-                    statusDiv.innerText = "Status: Split processing finished!";
-                } else {
-                    statusDiv.style.color = 'red';
-                    statusDiv.innerText = `Processing failed: ${result.message}`;
+                    statusDiv.innerText = "Status: Split processing finished and cached!";
                 }
             } catch (err) {
                 statusDiv.style.color = 'red';
                 statusDiv.innerText = "Server error during row processing.";
-                console.error(err);
             }
         });
 
-        // Universal Download Engine supporting iOS Safaris and Desktops alike
         async function downloadCSV(records, filename) {
             let csvContent = "Timestamp,Transcript\\n";
             records.forEach(row => {
@@ -156,44 +199,14 @@ HTML_INTERFACE = """
                 let cleanTranscript = text.replace(/"/g, '""');
                 csvContent += `"${time}","${cleanTranscript}"\\n`;
             });
-
-            if ('showSaveFilePicker' in window) {
-                try {
-                    const options = {
-                        suggestedName: filename,
-                        types: [{ description: 'CSV Files', accept: { 'text/csv': ['.csv'] } }],
-                    };
-                    const handle = await window.showSaveFilePicker(options);
-                    const writable = await handle.createWritable();
-                    await writable.write(csvContent);
-                    await writable.close();
-                    statusDiv.style.color = 'green';
-                    statusDiv.innerText = `Status: ${filename} saved successfully!`;
-                    return;
-                } catch (err) {
-                    if (err.name === 'AbortError') return;
-                    console.warn("File Picker fell back:", err);
-                }
-            }
-
-            // Universal Blob Fallback
-            try {
-                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement("a");
-                link.setAttribute("href", url);
-                link.setAttribute("download", filename);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-                statusDiv.style.color = 'green';
-                statusDiv.innerText = `Status: ${filename} downloaded to device storage!`;
-            } catch (err) {
-                statusDiv.style.color = 'red';
-                statusDiv.innerText = `Export failed: ${err.message}`;
-            }
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         exportBtn.addEventListener('click', () => downloadCSV(sessionRecords, 'voice_history.csv'));
@@ -201,7 +214,6 @@ HTML_INTERFACE = """
 
         startBtn.addEventListener('click', async () => {
             audioChunks = [];
-            statusDiv.style.color = '#555';
             statusDiv.innerText = "Status: Requesting microphone access...";
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -213,22 +225,14 @@ HTML_INTERFACE = """
                     const formData = new FormData();
                     formData.append('audio_data', audioBlob, 'recording.webm');
                     
-                    fetch('/process-audio', { method: 'POST', body: formData })
+                    fetch('/soccer-grade/process-audio', { method: 'POST', body: formData })
                         .then(response => response.json())
                         .then(data => {
                             if (data.status === 'success') {
                                 statusDiv.style.color = 'green';
                                 statusDiv.innerText = "Transcribed successfully!";
                                 appendToSessionDOM(data.timestamp, data.transcript);
-                            } else {
-                                statusDiv.style.color = 'red';
-                                statusDiv.innerText = `Error: ${data.message}`;
                             }
-                        })
-                        .catch(err => {
-                            statusDiv.style.color = 'red';
-                            statusDiv.innerText = "Server communication failed.";
-                            console.error(err);
                         });
                 };
                 mediaRecorder.start();
@@ -237,8 +241,7 @@ HTML_INTERFACE = """
                 stopBtn.disabled = false;
             } catch (err) {
                 statusDiv.style.color = 'red';
-                statusDiv.innerText = "Status: Microphone access denied or unsupported format.";
-                console.error(err);
+                statusDiv.innerText = "Status: Microphone access denied.";
             }
         });
 
@@ -253,7 +256,70 @@ HTML_INTERFACE = """
 </html>
 """
 
-# Helper function executing the smart contextual regex splitting logic
+# --- PAGE C: DATA UPLOAD MANAGER (ACCESSES VOICE DATAFRAMES) ---
+UPLOAD_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Upload Manager</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        .back-nav { text-align: left; margin-bottom: 20px; }
+        .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: left; }
+        .data-block { background: #f1f3f5; border-radius: 6px; padding: 15px; margin-bottom: 20px; font-size: 14px; max-height: 200px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; }
+        th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 12px; }
+        th { background-color: #e9ecef; }
+        .upload-zone { border: 2px dashed #007bff; padding: 25px; text-align: center; background: #f8f9fa; border-radius: 6px; margin-top: 15px; }
+        input[type="file"] { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="back-nav">
+        <a href="/" class="back-link">← Back to Hub</a>
+    </div>
+    <div class="container">
+        <h2>Data Upload Manager</h2>
+        <p style="color:#666;">This interface reads cached session components generated directly from the Voice Logging environment.</p>
+        
+        <h3>Active Voice Stream Snapshot (Raw)</h3>
+        <div class="data-block">
+            {% if raw_data_table %}
+                {{ raw_data_table|safe }}
+            {% else %}
+                <span style="color:#999;">No raw recording logs currently loaded in session memory.</span>
+            {% endif %}
+        </div>
+
+        <h3>Active Voice Stream Snapshot (Processed & Exploded)</h3>
+        <div class="data-block">
+            {% if processed_data_table %}
+                {{ processed_data_table|safe }}
+            {% else %}
+                <span style="color:#999;">No processed/split comment structures currently loaded in session memory.</span>
+            {% endif %}
+        </div>
+
+        <h3>Upload Spreadsheet Metrics</h3>
+        <div class="upload-zone">
+            <form action="/upload-manager/submit-file" method="POST" enctype="multipart/form-data">
+                <label style="font-weight:bold; display:block;">Select CSV File to sync:</label>
+                <input type="file" name="uploaded_csv" accept=".csv" required><br><br>
+                <button type="submit" style="padding:10px 20px; background:#28a745; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Analyze & Ingest File</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# =====================================================================
+# SECTION 2: UTILITIES & TEXT SPLITTING ALGORITHM
+# =====================================================================
+
 def split_comments_smart(text):
     pattern = (
         r"[.,;\s]+"
@@ -265,41 +331,48 @@ def split_comments_smart(text):
     segments = re.split(pattern, text, flags=re.IGNORECASE)
     return [seg.strip() for seg in segments if seg.strip()]
 
+# =====================================================================
+# SECTION 3: APPS CONTROLLER ENGINE & ROUTING
+# =====================================================================
+
+# --- INDEX ROUTE: LANDING DASHBOARD ---
 @app.route("/")
 def index():
-    return render_template_string(HTML_INTERFACE)
+    return render_template_string(LANDING_PAGE_HTML)
 
-# 2. New Route: Accepts the array of rows, structures it to a DataFrame, splits, explodes, and returns JSON
-@app.route("/split-dataframe", methods=["POST"])
+# --- APPS COMPONENT 1: SOCCER VOICE RECORDER ENGINE ---
+@app.route("/soccer-grade")
+def soccer_grade():
+    return render_template_string(SOCCER_INTERFACE_HTML)
+
+@app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
     try:
         req_data = request.get_json()
         if not req_data or 'data' not in req_data:
-            return jsonify({"status": "error", "message": "No data layout provided"}), 400
-            
+            return jsonify({"status": "error", "message": "No data structure provided"}), 400
         raw_rows = req_data['data']
         if not raw_rows:
             return jsonify({"status": "success", "processed_data": []})
 
-        # Convert the received browser array payload into a clean Pandas DataFrame
-        df = pd.DataFrame(raw_rows)
-        # Match dictionary property keys coming from JS frontend mappings
-        df.columns = ['Timestamp', 'Transcript']
+        # Process Raw Data and commit to Session Context Cookie
+        df_raw = pd.DataFrame(raw_rows)
+        df_raw.columns = ['Timestamp', 'Transcript']
+        session['cached_raw'] = df_raw.to_dict(orient='records')
 
-        # Apply the multi-row contextual split rule mapping
-        df['Transcript'] = df['Transcript'].apply(split_comments_smart)
+        # Run multi-row contextual split extraction mapping
+        df_processed = df_raw.copy()
+        df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
+        df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
         
-        # Explode array back into longitudinal rows
-        df_exploded = df.explode('Transcript').reset_index(drop=True)
+        # Ingest Exploded layout into global session context
+        session['cached_processed'] = df_exploded.to_dict(orient='records')
         
-        # Return converted record mapping to UI container
-        processed_json = df_exploded.to_dict(orient='records')
-        return jsonify({"status": "success", "processed_data": processed_json})
-        
+        return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route("/process-audio", methods=["POST"])
+@app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
     if not client:
         return jsonify({"status": "error", "message": "Mistral API key missing from environment variables."}), 500
@@ -318,18 +391,59 @@ def process_audio():
             )
             detected_text = transcription_response.text.strip()
     except Exception as e:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        if os.path.exists(temp_filename): os.remove(temp_filename)
         return jsonify({"status": "error", "message": f"Transcription failed: {str(e)}"}), 500
 
-    if os.path.exists(temp_filename):
-        os.remove(temp_filename)
-
-    if not detected_text:
-        detected_text = "[Unintelligible audio recorded]"
+    if os.path.exists(temp_filename): os.remove(temp_filename)
+    if not detected_text: detected_text = "[Unintelligible audio recorded]"
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
+
+# --- APPS COMPONENT 2: UPLOAD CONTROLLER & CROSS-APP ENGINE ---
+@app.route("/upload-manager")
+def upload_manager():
+    # Pull active dataframes directly out of Session memory
+    raw_session = session.get('cached_raw', [])
+    processed_session = session.get('cached_processed', [])
+
+    # Convert to HTML tables to inspect data live on page load
+    raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
+    processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
+
+    return render_template_string(
+        UPLOAD_PAGE_HTML, 
+        raw_data_table=raw_data_table, 
+        processed_data_table=processed_data_table
+    )
+
+@app.route("/upload-manager/submit-file", methods=["POST"])
+def submit_uploaded_file():
+    if 'uploaded_csv' not in request.files:
+        return "No file selected", 400
+    
+    file = request.files['uploaded_csv']
+    if file.filename == '':
+        return "Empty file selection", 400
+
+    try:
+        # Load the uploaded file structure into Pandas
+        uploaded_df = pd.read_csv(file)
+        
+        # Fetch the voice logs array inside this separate page
+        processed_voice_logs = session.get('cached_processed', [])
+        voice_df = pd.DataFrame(processed_voice_logs)
+
+        # Example analysis step: show dimensions or echo data back
+        summary_info = f"Uploaded CSV Shape: {uploaded_df.shape}. Shared Voice Logs Available: {voice_df.shape} rows."
+        return f"<h3>Upload processed successfully!</h3><p>{summary_info}</p><p><a href='/upload-manager'>Return to Upload Page</a></p>"
+    except Exception as e:
+        return f"Error analyzing data structure: {str(e)}", 500
+
+# Placeholder for another future data application route
+@app.route("/trading-dashboard")
+def trading_dashboard():
+    return "<h3>Trading Dashboard Sandbox</h3><p>Vision pipeline tracking sandbox.</p><a href='/'>← Back Hub</a>"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
