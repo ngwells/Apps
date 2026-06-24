@@ -7,7 +7,6 @@ from mistralai.client import Mistral
 import pandas as pd
 
 app = Flask(__name__)
-# Secret key required to use Flask encrypted client-side sessions
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
 # Initialize Mistral Client from environment variable
@@ -256,7 +255,7 @@ SOCCER_INTERFACE_HTML = """
 </html>
 """
 
-# --- PAGE C: DATA UPLOAD MANAGER (ACCESSES VOICE DATAFRAMES) ---
+# --- PAGE C: DATA UPLOAD MANAGER (WITH SEPARATE UPLOAD PREVIEW) ---
 UPLOAD_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -265,11 +264,12 @@ UPLOAD_PAGE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Data Upload Manager</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        body { font-family: Arial, sans-serif; max-width: 850px; margin: 40px auto; text-align: center; background: #f9f9f9; }
         .back-nav { text-align: left; margin-bottom: 20px; }
         .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
         .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: left; }
         .data-block { background: #f1f3f5; border-radius: 6px; padding: 15px; margin-bottom: 20px; font-size: 14px; max-height: 200px; overflow-y: auto; }
+        .upload-block { background: #e3f2fd; border: 1px solid #90caf9; border-radius: 6px; padding: 15px; margin-bottom: 20px; font-size: 14px; max-height: 250px; overflow-y: auto; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; }
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 12px; }
         th { background-color: #e9ecef; }
@@ -283,9 +283,18 @@ UPLOAD_PAGE_HTML = """
     </div>
     <div class="container">
         <h2>Data Upload Manager</h2>
-        <p style="color:#666;">This interface reads cached session components generated directly from the Voice Logging environment.</p>
+        <p style="color:#666;">Manage your imported spreadsheet files separately alongside your captured active voice logs.</p>
         
-        <h3>Active Voice Stream Snapshot (Raw)</h3>
+        <h3 style="color: #0d47a1;">Active Uploaded Spreadsheet Data</h3>
+        <div class="upload-block">
+            {% if uploaded_data_table %}
+                {{ uploaded_data_table|safe }}
+            {% else %}
+                <span style="color:#666; font-style: italic;">No uploaded spreadsheet records currently loaded in active space. Use the dropzone below to load a CSV.</span>
+            {% endif %}
+        </div>
+
+        <h3>Voice Stream Snapshot (Raw)</h3>
         <div class="data-block">
             {% if raw_data_table %}
                 {{ raw_data_table|safe }}
@@ -294,7 +303,7 @@ UPLOAD_PAGE_HTML = """
             {% endif %}
         </div>
 
-        <h3>Active Voice Stream Snapshot (Processed & Exploded)</h3>
+        <h3>Voice Stream Snapshot (Processed & Exploded)</h3>
         <div class="data-block">
             {% if processed_data_table %}
                 {{ processed_data_table|safe }}
@@ -306,7 +315,7 @@ UPLOAD_PAGE_HTML = """
         <h3>Upload Spreadsheet Metrics</h3>
         <div class="upload-zone">
             <form action="/upload-manager/submit-file" method="POST" enctype="multipart/form-data">
-                <label style="font-weight:bold; display:block;">Select CSV File to sync:</label>
+                <label style="font-weight:bold; display:block;">Select CSV File to import:</label>
                 <input type="file" name="uploaded_csv" accept=".csv" required><br><br>
                 <button type="submit" style="padding:10px 20px; background:#28a745; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Analyze & Ingest File</button>
             </form>
@@ -335,12 +344,10 @@ def split_comments_smart(text):
 # SECTION 3: APPS CONTROLLER ENGINE & ROUTING
 # =====================================================================
 
-# --- INDEX ROUTE: LANDING DASHBOARD ---
 @app.route("/")
 def index():
     return render_template_string(LANDING_PAGE_HTML)
 
-# --- APPS COMPONENT 1: SOCCER VOICE RECORDER ENGINE ---
 @app.route("/soccer-grade")
 def soccer_grade():
     return render_template_string(SOCCER_INTERFACE_HTML)
@@ -355,19 +362,15 @@ def split_dataframe():
         if not raw_rows:
             return jsonify({"status": "success", "processed_data": []})
 
-        # Process Raw Data and commit to Session Context Cookie
         df_raw = pd.DataFrame(raw_rows)
         df_raw.columns = ['Timestamp', 'Transcript']
         session['cached_raw'] = df_raw.to_dict(orient='records')
 
-        # Run multi-row contextual split extraction mapping
         df_processed = df_raw.copy()
         df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
         df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
         
-        # Ingest Exploded layout into global session context
         session['cached_processed'] = df_exploded.to_dict(orient='records')
-        
         return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -375,7 +378,7 @@ def split_dataframe():
 @app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
     if not client:
-        return jsonify({"status": "error", "message": "Mistral API key missing from environment variables."}), 500
+        return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     if 'audio_data' not in request.files:
         return jsonify({"status": "error", "message": "No audio data received"}), 400
 
@@ -400,50 +403,54 @@ def process_audio():
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
 
-# --- APPS COMPONENT 2: UPLOAD CONTROLLER & CROSS-APP ENGINE ---
+
+# --- UPLOAD CONTROLLER ENGAGEMENT ---
 @app.route("/upload-manager")
 def upload_manager():
-    # Pull active dataframes directly out of Session memory
+    # Pull separate data objects from session
     raw_session = session.get('cached_raw', [])
     processed_session = session.get('cached_processed', [])
+    uploaded_session = session.get('cached_uploaded', [])  # Separate uploaded file
 
-    # Convert to HTML tables to inspect data live on page load
+    # Convert dataframe logs to clean safe HTML blocks
     raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
     processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
+    
+    # NEW: Generate rendering view for uploaded CSV elements
+    uploaded_data_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
 
     return render_template_string(
         UPLOAD_PAGE_HTML, 
         raw_data_table=raw_data_table, 
-        processed_data_table=processed_data_table
+        processed_data_table=processed_data_table,
+        uploaded_data_table=uploaded_data_table
     )
 
 @app.route("/upload-manager/submit-file", methods=["POST"])
 def submit_uploaded_file():
     if 'uploaded_csv' not in request.files:
         return "No file selected", 400
-    
     file = request.files['uploaded_csv']
     if file.filename == '':
         return "Empty file selection", 400
 
     try:
-        # Load the uploaded file structure into Pandas
+        # Load file into Pandas DataFrame
         uploaded_df = pd.read_csv(file)
         
-        # Fetch the voice logs array inside this separate page
-        processed_voice_logs = session.get('cached_processed', [])
-        voice_df = pd.DataFrame(processed_voice_logs)
-
-        # Example analysis step: show dimensions or echo data back
-        summary_info = f"Uploaded CSV Shape: {uploaded_df.shape}. Shared Voice Logs Available: {voice_df.shape} rows."
-        return f"<h3>Upload processed successfully!</h3><p>{summary_info}</p><p><a href='/upload-manager'>Return to Upload Page</a></p>"
+        # Save explicitly into its own separate session tracking dictionary array
+        session['cached_uploaded'] = uploaded_df.to_dict(orient='records')
+        
+        # Redirect back to the manager page so the new uploaded frame renders automatically
+        return render_template_string(
+            "<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>"
+        )
     except Exception as e:
         return f"Error analyzing data structure: {str(e)}", 500
 
-# Placeholder for another future data application route
 @app.route("/trading-dashboard")
 def trading_dashboard():
-    return "<h3>Trading Dashboard Sandbox</h3><p>Vision pipeline tracking sandbox.</p><a href='/'>← Back Hub</a>"
+    return "<h3>Trading Dashboard Sandbox</h3><a href='/'>← Back Hub</a>"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
