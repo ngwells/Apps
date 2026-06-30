@@ -260,7 +260,7 @@ SOCCER_INTERFACE_HTML = """
 </html>
 """
 
-# --- PAGE C: DATA UPLOAD MANAGER (WITH SEPARATE UPLOAD PREVIEW) ---
+# --- PAGE C: DATA UPLOAD MANAGER ---
 UPLOAD_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -330,7 +330,7 @@ UPLOAD_PAGE_HTML = """
 </html>
 """
 
-# --- PAGE D: CREATE LINE UP INTERFACE ---
+# --- PAGE D: CREATE LINE UP INTERFACE (WITH TACTICAL FORMAT SELECTORS & MISTRAL AGENT) ---
 LINEUP_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -342,9 +342,26 @@ LINEUP_PAGE_HTML = """
         body { font-family: Arial, sans-serif; max-width: 850px; margin: 40px auto; text-align: center; background: #f9f9f9; }
         .back-nav { text-align: left; margin-bottom: 20px; }
         .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
-        .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .placeholder-box { border: 2px dashed #ffc107; background: #fffde7; padding: 30px; border-radius: 6px; margin-bottom: 30px; }
-        .debug-panel { background: #f1f3f5; border-radius: 6px; padding: 15px; text-align: left; font-size: 12px; }
+        .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: left; }
+        .placeholder-box { border: 2px dashed #ffc107; background: #fffde7; padding: 20px; border-radius: 6px; margin-bottom: 30px; text-align: center; }
+        
+        .format-selector { display: flex; justify-content: center; gap: 15px; margin: 25px 0; }
+        .btn-format { padding: 12px 30px; font-size: 16px; font-weight: bold; border: 2px solid #007bff; background: white; color: #007bff; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+        .btn-format.active { background: #007bff; color: white; box-shadow: 0 4px 10px rgba(0,123,255,0.3); }
+        .btn-format:hover { background: #e6f0ff; }
+        .btn-format.active:hover { background: #007bff; }
+        
+        .action-container { text-align: center; margin: 20px 0; }
+        .btn-execute { padding: 14px 40px; font-size: 15px; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }
+        .btn-execute:disabled { background: #ccc; cursor: not-allowed; box-shadow: none; }
+        
+        .llm-response-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 20px; margin-top: 25px; min-height: 100px; }
+        .llm-response-box table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        .llm-response-box th, .llm-response-box td { border: 1px solid #dee2e6; padding: 10px; text-align: left; font-size: 13px; }
+        .llm-response-box th { background-color: #f1f3f5; font-weight: bold; }
+        
+        .loader { display: none; text-align: center; font-weight: bold; color: #666; margin: 20px 0; }
+        .debug-panel { background: #f1f3f5; border-radius: 6px; padding: 15px; font-size: 12px; margin-top: 30px; }
     </style>
 </head>
 <body>
@@ -352,10 +369,30 @@ LINEUP_PAGE_HTML = """
         <a href="/" class="back-link">← Back to Hub</a>
     </div>
     <div class="container">
-        <h2>Line Up Builder Workspace</h2>
+        <h2 style="text-align: center; margin-bottom: 5px;">Line Up Builder Workspace</h2>
+        <p style="color:#666; text-align: center; margin-bottom: 25px;">Select a configuration grid below to evaluate tactical alignment blueprints via Mistral AI.</p>
+        
         <div class="placeholder-box">
-            <h3 style="color: #856404; margin-top: 0;">Content Coming Soon</h3>
-            <p style="color: #666; margin-bottom: 0;">The interactive field arranger and drag-and-drop roster builder tools are currently in development.</p>
+            <h3 style="color: #856404; margin-top: 0; font-size: 16px;">Content Coming Soon</h3>
+            <p style="color: #666; margin-bottom: 0; font-size: 13px;">The visual field arranger and interactive drag-and-drop roster canvas are currently in validation.</p>
+        </div>
+
+        <h3 style="font-size: 16px; color:#333; border-bottom: 1px solid #eee; padding-bottom: 8px;">1. Select Roster Matrix Format</h3>
+        <div class="format-selector">
+            <button type="button" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
+            <button type="button" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
+            <button type="button" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+        </div>
+
+        <div class="action-container">
+            <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()" disabled>Execute Tactical Blueprint Generation</button>
+        </div>
+
+        <div class="loader" id="loading-spinner">Processing context frames and executing Mistral matrix construction...</div>
+
+        <h3 style="font-size: 16px; color:#333; margin-top: 30px;">2. Generated System Response Dataframe</h3>
+        <div class="llm-response-box" id="response-anchor">
+            <span style="color:#999; font-style: italic;">No configuration structure generated. Select a match format above and click execute.</span>
         </div>
         
         <div class="debug-panel">
@@ -367,6 +404,54 @@ LINEUP_PAGE_HTML = """
             </ul>
         </div>
     </div>
+
+    <script>
+        let selectedFormatName = "";
+
+        function selectFormat(clickedButton, formatValue) {
+            const buttons = document.querySelectorAll('.btn-format');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            clickedButton.classList.add('active');
+            selectedFormatName = formatValue;
+            
+            document.getElementById('execute-btn').disabled = false;
+        }
+
+        async function runTacticalPrompt() {
+            if (!selectedFormatName) return;
+            
+            const runButton = document.getElementById('execute-btn');
+            const spinner = document.getElementById('loading-spinner');
+            const responseAnchor = document.getElementById('response-anchor');
+            
+            runButton.disabled = true;
+            spinner.style.display = "block";
+            responseAnchor.innerHTML = '<span style="color:#666; font-style:italic;">Querying Mistral model layers...</span>';
+            
+            try {
+                const response = await fetch('/create-lineup/generate-tactics', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ format_type: selectedFormatName })
+                });
+                const data = await response.json();
+                
+                spinner.style.display = "none";
+                runButton.disabled = false;
+                
+                if (data.status === 'success') {
+                    responseAnchor.innerHTML = data.html_payload;
+                } else {
+                    responseAnchor.innerHTML = `<span style="color:#dc3545; font-weight:bold;">Error: ${data.message}</span>`;
+                }
+            } catch (err) {
+                spinner.style.display = "none";
+                runButton.disabled = false;
+                responseAnchor.innerHTML = '<span style="color:#dc3545; font-weight:bold;">Network pipeline transmission breakdown.</span>';
+            }
+        }
+    </script>
 </body>
 </html>
 """
@@ -538,7 +623,7 @@ def submit_uploaded_file():
     except Exception as e:
         return f"Error analyzing data structure: {str(e)}", 500
 
-# --- NEW ROUTE: CREATE LINE UP ---
+# --- ROUTE: CREATE LINE UP ---
 @app.route("/create-lineup")
 def create_lineup():
     raw_session = session.get('cached_raw', [])
@@ -552,7 +637,63 @@ def create_lineup():
         uploaded_count=len(uploaded_session)
     )
 
-# --- NEW ROUTE: ANALYTICS ---
+# --- NEW ASYNC ROUTE: MISTRAL TACTICAL LLM PROMPT GENERATOR ---
+@app.route("/create-lineup/generate-tactics", methods=["POST"])
+def generate_tactics():
+    if not client:
+        return jsonify({"status": "error", "message": "Mistral API initialization key missing from system environment variables."}), 500
+        
+    req_body = request.get_json()
+    format_type = req_body.get("format_type", "11v11")
+    
+    # Extract session context pools to inject as raw programmatic support vectors if needed
+    raw_logs = session.get('cached_raw', [])
+    processed_logs = session.get('cached_processed', [])
+    uploaded_metrics = session.get('cached_uploaded', [])
+    
+    # Construct prompt requested by user with embedded constraints
+    prompt_instruction = f"""
+    give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position.
+    
+    CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text.
+    Format Example:
+    [
+      {{"position": "Goalkeeper (GK)", "narrative_description": "Exceptional shot-stopping reflexes akin to Lev Yashin, paired with modern distribution traits..."}}
+    ]
+    """
+    
+    try:
+        response_stream = client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {"role": "system", "content": "You are an advanced soccer tactics architect and sports data analyst. Output requested data exclusively as clean JSON arrays."},
+                {"role": "user", "content": prompt_instruction}
+            ],
+            response_format={"type": "json_object"}
+        )
+        
+        raw_content = response_stream.choices[0].message.content.strip()
+        
+        # Parse output data back into a neat pandas frame
+        parsed_json = json.loads(raw_content)
+        if isinstance(parsed_json, dict) and len(parsed_json.keys()) == 1:
+            key = list(parsed_json.keys())[0]
+            parsed_list = parsed_json[key]
+        else:
+            parsed_list = parsed_json
+            
+        df_output = pd.DataFrame(parsed_list)
+        # Verify columns exist or assign cleanly
+        if len(df_output.columns) >= 2:
+            df_output.columns = ['Position', 'Narrative Description Summary']
+            
+        html_table = df_output.to_html(classes='table', index=False)
+        return jsonify({"status": "success", "html_payload": html_table})
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+
+# --- ROUTE: ANALYTICS ---
 @app.route("/analytics")
 def analytics():
     raw_session = session.get('cached_raw', [])
