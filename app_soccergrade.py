@@ -164,7 +164,6 @@ SOCCER_INTERFACE_HTML = """
         const historyList = document.getElementById('history-list');
         const processedList = document.getElementById('processed-list');
         
-        // Hydrate arrays from initial page templates
         let sessionRecords = {{ raw_records_json|safe }};
         let processedRecords = {{ processed_records_json|safe }};
 
@@ -179,7 +178,6 @@ SOCCER_INTERFACE_HTML = """
             li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
             historyList.insertBefore(li, historyList.firstChild);
 
-            // Dynamically synchronize snapshot updates down to back-end cache frame
             fetch('/soccer-grade/sync-raw', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -441,7 +439,6 @@ LINEUP_PAGE_HTML = """
             selectedFormatName = formatValue;
             document.getElementById('execute-btn').disabled = false;
 
-            // Notify backend of button click highlight retention
             fetch('/create-lineup/select-format', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -536,6 +533,13 @@ ANALYTICS_PAGE_HTML = """
                 <h3 style="margin-top:0; color:#28a745;">3. Ingested External Metrics Spreadsheet</h3>
                 <div class="table-wrap">
                     {% if uploaded_table %} {{ uploaded_table|safe }} {% else %} <span class="empty-text">No uploaded analytical metrics spreadsheet file parsed yet.</span> {% endif %}
+                </div>
+            </div>
+
+            <div class="section-box" style="border-left: 4px solid #ffc107;">
+                <h3 style="margin-top:0; color:#b58100;">4. Generated Tactical Blueprint Frame (Mistral AI Core)</h3>
+                <div class="table-wrap">
+                    {% if blueprint_table %} {{ blueprint_table|safe }} {% else %} <span class="empty-text">No roster configuration blueprint generated yet from the Create Line Up tab.</span> {% endif %}
                 </div>
             </div>
         </div>
@@ -741,7 +745,6 @@ def generate_tactics():
             
         html_table = df_output.to_html(classes='table', index=False)
         
-        # Save output into session context cache block
         session['cached_blueprint'] = html_table
         return jsonify({"status": "success", "html_payload": html_table})
         
@@ -754,6 +757,7 @@ def analytics():
     raw_session = session.get('cached_raw', [])
     processed_session = session.get('cached_processed', [])
     uploaded_session = session.get('cached_uploaded', [])
+    blueprint_table = session.get('cached_blueprint', None)
     
     raw_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
     processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
@@ -763,7 +767,8 @@ def analytics():
         ANALYTICS_PAGE_HTML,
         raw_table=raw_table,
         processed_table=processed_table,
-        uploaded_table=uploaded_table
+        uploaded_table=uploaded_table,
+        blueprint_table=blueprint_table
     )
 
 if __name__ == "__main__":
