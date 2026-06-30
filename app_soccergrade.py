@@ -13,9 +13,9 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automat
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-# =====================================================================
-# SECTION 1: HTML INTERFACES (FRONTEND JAVASCRIPT & UI LAYOUTS)
-# =====================================================================
+# ===================================================================== #
+# SECTION 1: HTML INTERFACES (FRONTEND JAVASCRIPT & UI LAYOUTS)        #
+# ===================================================================== #
 
 # --- PAGE A: CENTRAL HUB LANDING PAGE ---
 LANDING_PAGE_HTML = """
@@ -26,32 +26,48 @@ LANDING_PAGE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Application Hub</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 900px; margin: 60px auto; background: #f4f6f9; text-align: center; color: #333; }
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 60px auto; background: #f4f6f9; text-align: center; color: #333; }
         h1 { margin-bottom: 10px; color: #222; }
         .subtitle { color: #666; margin-bottom: 40px; font-size: 16px; font-weight: bold; }
-        .grid { display: flex; justify-content: center; gap: 30px; flex-wrap: wrap; padding: 0 20px; }
-        .card { background: white; width: 280px; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; }
+        .grid { display: flex; justify-content: center; gap: 25px; flex-wrap: wrap; padding: 0 20px; }
+        .card { background: white; width: 200px; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; display: flex; flex-direction: column; justify-content: space-between; }
         .card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-        .card h3 { margin-top: 0; color: #007bff; font-size: 20px; }
-        .card p { color: #555; font-size: 14px; line-height: 1.5; min-height: 60px; }
-        .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 12px; padding: 4px 8px; border-radius: 4px; font-weight: bold; margin-top: 10px; }
+        .card h3 { margin-top: 0; color: #007bff; font-size: 18px; }
+        .card p { color: #555; font-size: 13px; line-height: 1.5; min-height: 60px; margin-bottom: 15px; }
+        .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-weight: bold; align-self: flex-start; }
     </style>
 </head>
 <body>
     <h1>Data & Voice Automation Suite</h1>
     <p class="subtitle">Click one of the links below to launch an environment:</p>
-    
     <div class="grid">
         <a href="/soccer-grade" class="card">
-            <h3>1. Voice Logger</h3>
-            <p>Voice-to-text logging assistant featuring automated player-by-player row splitting and structured CSV exports.</p>
+            <div>
+                <h3>1. Voice Logger</h3>
+                <p>Voice-to-text logging assistant featuring automated player-by-player row splitting.</p>
+            </div>
             <span class="badge">Voice Input</span>
         </a>
-
         <a href="/upload-manager" class="card">
-            <h3>2. Data Upload Manager</h3>
-            <p>Upload external metrics data or spreadsheets and merge or inspect them with your recorded voice sessions.</p>
+            <div>
+                <h3>2. Data Manager</h3>
+                <p>Upload external metrics data or spreadsheets and manage session assets.</p>
+            </div>
             <span class="badge">File Processing</span>
+        </a>
+        <a href="/create-lineup" class="card">
+            <div>
+                <h3>3. Create Line Up</h3>
+                <p>Build and arrange tactical team lineups utilizing active roster data templates.</p>
+            </div>
+            <span class="badge">Tactics</span>
+        </a>
+        <a href="/analytics" class="card">
+            <div>
+                <h3>4. Analytics</h3>
+                <p>Review raw files, processed logs, and uploaded metrics dashboards side by side.</p>
+            </div>
+            <span class="badge">Insights</span>
         </a>
     </div>
 </body>
@@ -99,20 +115,16 @@ SOCCER_INTERFACE_HTML = """
     <div class="container">
         <h1>Voice Recorder Logger</h1>
         <p>Click "Start Recording" to open your mic, and "Stop & Process" to transcribe.</p>
-        
         <div>
             <button id="start-btn" class="btn-record">Start Recording</button>
             <button id="stop-btn" class="btn-stop" disabled>Stop & Process</button>
         </div>
-        
         <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
             <button id="process-btn" class="btn-process" disabled>Split & Process Rows</button>
             <button id="export-btn" class="btn-save" disabled>Export Raw CSV</button>
             <button id="export-processed-btn" class="btn-save-processed" disabled>Export Processed CSV</button>
         </div>
-
         <div id="status">Status: Idle</div>
-        
         <div class="flex-container">
             <div class="history-container">
                 <h3>Raw Transcripts:</h3>
@@ -128,11 +140,9 @@ SOCCER_INTERFACE_HTML = """
             </div>
         </div>
     </div>
-
     <script>
         let mediaRecorder;
         let audioChunks = [];
-        
         const startBtn = document.getElementById('start-btn');
         const stopBtn = document.getElementById('stop-btn');
         const processBtn = document.getElementById('process-btn');
@@ -141,18 +151,15 @@ SOCCER_INTERFACE_HTML = """
         const statusDiv = document.getElementById('status');
         const historyList = document.getElementById('history-list');
         const processedList = document.getElementById('processed-list');
-        
         let sessionRecords = [];
         let processedRecords = [];
 
         function appendToSessionDOM(timestamp, transcript) {
             const emptyState = document.getElementById('empty-state');
             if (emptyState) emptyState.remove();
-            
             sessionRecords.push({ timestamp, transcript });
             exportBtn.disabled = false;
             processBtn.disabled = false;
-            
             const li = document.createElement('li');
             li.className = 'history-item';
             li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
@@ -162,7 +169,6 @@ SOCCER_INTERFACE_HTML = """
         processBtn.addEventListener('click', async () => {
             if (sessionRecords.length === 0) return;
             statusDiv.innerText = "Status: Split-processing transcripts...";
-            
             try {
                 const response = await fetch('/soccer-grade/split-dataframe', {
                     method: 'POST',
@@ -170,7 +176,6 @@ SOCCER_INTERFACE_HTML = """
                     body: JSON.stringify({ data: sessionRecords })
                 });
                 const result = await response.json();
-                
                 if (result.status === 'success') {
                     processedRecords = result.processed_data;
                     processedList.innerHTML = '';
@@ -225,14 +230,14 @@ SOCCER_INTERFACE_HTML = """
                     formData.append('audio_data', audioBlob, 'recording.webm');
                     
                     fetch('/soccer-grade/process-audio', { method: 'POST', body: formData })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.status === 'success') {
-                                statusDiv.style.color = 'green';
-                                statusDiv.innerText = "Transcribed successfully!";
-                                appendToSessionDOM(data.timestamp, data.transcript);
-                            }
-                        });
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            statusDiv.style.color = 'green';
+                            statusDiv.innerText = "Transcribed successfully!";
+                            appendToSessionDOM(data.timestamp, data.transcript);
+                        }
+                    });
                 };
                 mediaRecorder.start();
                 statusDiv.innerText = "Status: Recording... speak now.";
@@ -325,9 +330,107 @@ UPLOAD_PAGE_HTML = """
 </html>
 """
 
-# =====================================================================
-# SECTION 2: UTILITIES & TEXT SPLITTING ALGORITHM
-# =====================================================================
+# --- PAGE D: CREATE LINE UP INTERFACE ---
+LINEUP_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Line Up</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 850px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        .back-nav { text-align: left; margin-bottom: 20px; }
+        .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
+        .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .placeholder-box { border: 2px dashed #ffc107; background: #fffde7; padding: 30px; border-radius: 6px; margin-bottom: 30px; }
+        .debug-panel { background: #f1f3f5; border-radius: 6px; padding: 15px; text-align: left; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="back-nav">
+        <a href="/" class="back-link">← Back to Hub</a>
+    </div>
+    <div class="container">
+        <h2>Line Up Builder Workspace</h2>
+        <div class="placeholder-box">
+            <h3 style="color: #856404; margin-top: 0;">Content Coming Soon</h3>
+            <p style="color: #666; margin-bottom: 0;">The interactive field arranger and drag-and-drop roster builder tools are currently in development.</p>
+        </div>
+        
+        <div class="debug-panel">
+            <h4 style="margin-top:0; color:#495057;">Available Environment Session Context Check:</h4>
+            <ul>
+                <li><strong>Raw Log Array Rows:</strong> {{ raw_count }} rows accessible</li>
+                <li><strong>Processed Log Array Rows:</strong> {{ processed_count }} rows accessible</li>
+                <li><strong>Uploaded Asset Records:</strong> {{ uploaded_count }} rows accessible</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# --- PAGE E: ANALYTICS & REPORTING INTERFACE ---
+ANALYTICS_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics & Reports</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        .back-nav { text-align: left; margin-bottom: 20px; }
+        .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: left; }
+        .data-grid { display: flex; flex-direction: column; gap: 25px; }
+        .section-box { background: #fff; border: 1px solid #dee2e6; border-radius: 6px; padding: 20px; }
+        .table-wrap { max-height: 250px; overflow-y: auto; margin-top: 10px; border: 1px solid #eee; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 12px; }
+        th { background-color: #f8f9fa; position: sticky; top: 0; }
+        .empty-text { color: #999; font-style: italic; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="back-nav">
+        <a href="/" class="back-link">← Back to Hub</a>
+    </div>
+    <div class="container">
+        <h2>Analytics & Unified Data Reporting</h2>
+        <p style="color:#666; margin-bottom: 25px;">Cross-reference spreadsheet telemetry sets with processed runtime streaming voice buffers directly below.</p>
+        
+        <div class="data-grid">
+            <div class="section-box" style="border-left: 4px solid #007bff;">
+                <h3 style="margin-top:0; color:#007bff;">1. Live Voice Stream Ingestion (Raw Logs)</h3>
+                <div class="table-wrap">
+                    {% if raw_table %} {{ raw_table|safe }} {% else %} <span class="empty-text">No active voice stream capture cached in memory.</span> {% endif %}
+                </div>
+            </div>
+
+            <div class="section-box" style="border-left: 4px solid #6f42c1;">
+                <h3 style="margin-top:0; color:#6f42c1;">2. Exploded Roster Logs (Smart Split Comment Entities)</h3>
+                <div class="table-wrap">
+                    {% if processed_table %} {{ processed_table|safe }} {% else %} <span class="empty-text">No exploded entity records broken out yet.</span> {% endif %}
+                </div>
+            </div>
+
+            <div class="section-box" style="border-left: 4px solid #28a745;">
+                <h3 style="margin-top:0; color:#28a745;">3. Ingested External Metrics Spreadsheet</h3>
+                <div class="table-wrap">
+                    {% if uploaded_table %} {{ uploaded_table|safe }} {% else %} <span class="empty-text">No uploaded analytical metrics spreadsheet file parsed yet.</span> {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# ===================================================================== #
+# SECTION 2: UTILITIES & TEXT SPLITTING ALGORITHM                       #
+# ===================================================================== #
 
 def split_comments_smart(text):
     pattern = (
@@ -340,9 +443,9 @@ def split_comments_smart(text):
     segments = re.split(pattern, text, flags=re.IGNORECASE)
     return [seg.strip() for seg in segments if seg.strip()]
 
-# =====================================================================
-# SECTION 3: APPS CONTROLLER ENGINE & ROUTING
-# =====================================================================
+# ===================================================================== #
+# SECTION 3: APPS CONTROLLER ENGINE & ROUTING                           #
+# ===================================================================== #
 
 @app.route("/")
 def index():
@@ -361,16 +464,16 @@ def split_dataframe():
         raw_rows = req_data['data']
         if not raw_rows:
             return jsonify({"status": "success", "processed_data": []})
-
+        
         df_raw = pd.DataFrame(raw_rows)
         df_raw.columns = ['Timestamp', 'Transcript']
         session['cached_raw'] = df_raw.to_dict(orient='records')
-
+        
         df_processed = df_raw.copy()
         df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
         df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
-        
         session['cached_processed'] = df_exploded.to_dict(orient='records')
+        
         return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -381,50 +484,45 @@ def process_audio():
         return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     if 'audio_data' not in request.files:
         return jsonify({"status": "error", "message": "No audio data received"}), 400
-
+    
     audio_file = request.files['audio_data']
     temp_filename = "temp_recording.webm"
     audio_file.save(temp_filename)
-
+    
     try:
         with open(temp_filename, "rb") as f:
             transcription_response = client.audio.transcriptions.complete(
                 model="voxtral-mini-latest",
                 file={"content": f.read(), "file_name": temp_filename}
             )
-            detected_text = transcription_response.text.strip()
+        detected_text = transcription_response.text.strip()
     except Exception as e:
-        if os.path.exists(temp_filename): os.remove(temp_filename)
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
         return jsonify({"status": "error", "message": f"Transcription failed: {str(e)}"}), 500
-
-    if os.path.exists(temp_filename): os.remove(temp_filename)
-    if not detected_text: detected_text = "[Unintelligible audio recorded]"
-
+        
+    if os.path.exists(temp_filename):
+        os.remove(temp_filename)
+        
+    if not detected_text:
+        detected_text = "[Unintelligible audio recorded]"
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
 
-
-# --- UPLOAD CONTROLLER ENGAGEMENT ---
 @app.route("/upload-manager")
 def upload_manager():
-    # Pull separate data objects from session
     raw_session = session.get('cached_raw', [])
     processed_session = session.get('cached_processed', [])
-    uploaded_session = session.get('cached_uploaded', [])  # Separate uploaded file
-
-    # Convert dataframe logs to clean safe HTML blocks
+    uploaded_session = session.get('cached_uploaded', [])
+    
     raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
     processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
-    
-    # NEW: Generate rendering view for uploaded CSV elements
     uploaded_data_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
-
-    return render_template_string(
-        UPLOAD_PAGE_HTML, 
-        raw_data_table=raw_data_table, 
-        processed_data_table=processed_data_table,
-        uploaded_data_table=uploaded_data_table
-    )
+    
+    return render_template_string(UPLOAD_PAGE_HTML, 
+                                  raw_data_table=raw_data_table, 
+                                  processed_data_table=processed_data_table, 
+                                  uploaded_data_table=uploaded_data_table)
 
 @app.route("/upload-manager/submit-file", methods=["POST"])
 def submit_uploaded_file():
@@ -433,20 +531,44 @@ def submit_uploaded_file():
     file = request.files['uploaded_csv']
     if file.filename == '':
         return "Empty file selection", 400
-
     try:
-        # Load file into Pandas DataFrame
         uploaded_df = pd.read_csv(file)
-        
-        # Save explicitly into its own separate session tracking dictionary array
         session['cached_uploaded'] = uploaded_df.to_dict(orient='records')
-        
-        # Redirect back to the manager page so the new uploaded frame renders automatically
-        return render_template_string(
-            "<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>"
-        )
+        return render_template_string("<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
     except Exception as e:
         return f"Error analyzing data structure: {str(e)}", 500
+
+# --- NEW ROUTE: CREATE LINE UP ---
+@app.route("/create-lineup")
+def create_lineup():
+    raw_session = session.get('cached_raw', [])
+    processed_session = session.get('cached_processed', [])
+    uploaded_session = session.get('cached_uploaded', [])
+    
+    return render_template_string(
+        LINEUP_PAGE_HTML,
+        raw_count=len(raw_session),
+        processed_count=len(processed_session),
+        uploaded_count=len(uploaded_session)
+    )
+
+# --- NEW ROUTE: ANALYTICS ---
+@app.route("/analytics")
+def analytics():
+    raw_session = session.get('cached_raw', [])
+    processed_session = session.get('cached_processed', [])
+    uploaded_session = session.get('cached_uploaded', [])
+    
+    raw_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
+    processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
+    uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
+    
+    return render_template_string(
+        ANALYTICS_PAGE_HTML,
+        raw_table=raw_table,
+        processed_table=processed_table,
+        uploaded_table=uploaded_table
+    )
 
 @app.route("/trading-dashboard")
 def trading_dashboard():
