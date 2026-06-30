@@ -30,7 +30,7 @@ app.config.update(
 )
 
 # Initialize Mistral Client from environment variable
-API_KEY = os.environ.get("MISTRAL_API_KEY", "nmCC6YdwpUvKpTePlQVyTASyEc07AI9a")
+API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # ===================================================================== #
