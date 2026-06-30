@@ -1,10 +1,22 @@
 import datetime
+import io
 import json
+import math
 import os
 import re
+import base64
 from flask import Flask, jsonify, request, render_template_string, session
 from mistralai.client import Mistral
+import numpy as np
 import pandas as pd
+import requests
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Force matplotlib to use a non-interactive backend so it handles background image rendering smoothly without trying to open a desktop UI window
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud, STOPWORDS
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
@@ -18,7 +30,7 @@ app.config.update(
 )
 
 # Initialize Mistral Client from environment variable
-API_KEY = os.environ.get("MISTRAL_API_KEY")
+API_KEY = os.environ.get("MISTRAL_API_KEY", "nmCC6YdwpUvKpTePlQVyTASyEc07AI9a")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # ===================================================================== #
@@ -43,7 +55,6 @@ LANDING_PAGE_HTML = """
         .card h3 { margin-top: 0; color: #007bff; font-size: 18px; }
         .card p { color: #555; font-size: 13px; line-height: 1.5; min-height: 60px; margin-bottom: 15px; }
         .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-weight: bold; align-self: flex-start; }
-        
         .system-controls { margin-top: 50px; border-top: 1px solid #ddd; padding-top: 20px; }
         .btn-reset-all { padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
         .btn-reset-all:hover { background: #5a6268; }
@@ -82,11 +93,9 @@ LANDING_PAGE_HTML = """
             <span class="badge">Insights</span>
         </a>
     </div>
-
     <div class="system-controls">
         <button class="btn-reset-all" onclick="clearFullSession()">Reset Environment Roster Cache</button>
     </div>
-
     <script>
         function clearFullSession() {
             if (confirm("Are you sure you want to completely flush all loaded dataframes, recordings, and generated files?")) {
@@ -307,7 +316,7 @@ SOCCER_INTERFACE_HTML = """
 </html>
 """
 
-# --- PAGE C: DATA UPLOAD MANAGER (WITH MOCK PROCESSED OVERRIDE DROPZONE) ---
+# --- PAGE C: DATA UPLOAD MANAGER ---
 UPLOAD_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -449,7 +458,7 @@ LINEUP_PAGE_HTML = """
         </div>
 
         <div class="action-container">
-            <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()" {% if not selected_format %}disabled{% endif %}>Execute Tactical Blueprint Generation</button>
+            <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()">Execute Tactical Blueprint Generation</button>
             <button type="button" id="clear-btn" class="btn-clear-frame" onclick="clearBlueprintFrame()">Clear Blueprint Table</button>
         </div>
 
@@ -540,7 +549,7 @@ LINEUP_PAGE_HTML = """
 </html>
 """
 
-# --- PAGE E: ANALYTICS & REPORTING INTERFACE ---
+# --- PAGE E: ANALYTICS & REPORTING INTERFACE (WITH MATPLOTLIB GRAPHICS EMBEDDING) ---
 ANALYTICS_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -549,7 +558,7 @@ ANALYTICS_PAGE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Analytics & Reports</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; text-align: center; background: #f9f9f9; }
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 40px auto; text-align: center; background: #f9f9f9; }
         .back-nav { text-align: left; margin-bottom: 20px; }
         .back-link { text-decoration: none; color: #007bff; font-weight: bold; font-size: 14px; }
         .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: left; }
@@ -561,6 +570,16 @@ ANALYTICS_PAGE_HTML = """
         th { background-color: #f8f9fa; position: sticky; top: 0; }
         .empty-text { color: #999; font-style: italic; font-size: 13px; }
         .badge-alert { background: #dc3545; color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; }
+        
+        .metric-banner { background: #f1f3f5; border: 1px solid #ccc; padding: 15px; border-radius: 6px; margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between; }
+        .action-cluster { display: flex; gap: 10px; }
+        .btn-metric { background: #2e7d32; color: white; border: none; padding: 10px 20px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .btn-metric:hover { background: #1b5e20; }
+        .btn-clear-metrics { background: #dc3545; color: white; border: none; padding: 10px 20px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .btn-clear-metrics:hover { background: #bd2130; }
+        
+        .plot-container { text-align: center; margin-top: 20px; padding: 15px; background: white; border: 1px solid #ddd; border-radius: 6px; }
+        .plot-img { max-width: 100%; height: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -571,6 +590,50 @@ ANALYTICS_PAGE_HTML = """
         <h2>Analytics & Unified Data Reporting</h2>
         <p style="color:#666; margin-bottom: 25px;">Cross-reference spreadsheet telemetry sets with processed runtime streaming voice buffers directly below.</p>
         
+        <div class="metric-banner">
+            <div>
+                <strong style="color:#222; display:block; font-size:15px;">Semantic Player-to-Position Evaluation System</strong>
+                <span style="font-size:12px; color:#666;">Triggers Mistral Vector Embeddings, Cosine Closures, Bar Plots, and Word Clouds.</span>
+            </div>
+            <div class="action-cluster">
+                <form action="/analytics/compute-metrics" method="POST" style="margin:0;">
+                    <button type="submit" class="btn-metric">Initiate Analytics Processing</button>
+                </form>
+                <form action="/analytics/clear-metrics" method="POST" style="margin:0;">
+                    <button type="submit" class="btn-clear-metrics">Clear results_df Frame</button>
+                </form>
+            </div>
+        </div>
+
+        {% if similarity_results_table %}
+        <div class="section-box" style="border-left: 4px solid #2e7d32; margin-bottom:25px; background: #fbfdfb;">
+            <h3 style="margin-top:0; color:#2e7d32;">🎯 Top Position Fit Recommendations (results_df)</h3>
+            <div class="table-wrap" style="max-height: 250px;">
+                {{ similarity_results_table|safe }}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if bar_plot_base64 or wordcloud_base64 %}
+        <div class="section-box" style="border-left: 4px solid #9467bd; margin-bottom:25px;">
+            <h3 style="margin-top:0; color:#9467bd;">📊 Data Visualization Analytics</h3>
+            
+            {% if bar_plot_base64 %}
+            <div class="plot-container">
+                <h4 style="margin-top:0; text-align:left; color:#333;">Horizontal Match Alignment Scores</h4>
+                <img class="plot-img" src="data:image/png;base64,{{ bar_plot_base64 }}" alt="Confidence Bar Plot Grid">
+            </div>
+            {% endif %}
+
+            {% if wordcloud_base64 %}
+            <div class="plot-container">
+                <h4 style="margin-top:0; text-align:left; color:#333;">Player Narrative Token Frequencies (Word Clouds)</h4>
+                <img class="plot-img" src="data:image/png;base64,{{ wordcloud_base64 }}" alt="Player Descriptions Word Cloud Grid">
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
         <div class="data-grid">
             <div class="section-box" style="border-left: 4px solid #007bff;">
                 <h3 style="margin-top:0; color:#007bff;">1. Live Voice Stream Ingestion (Raw Logs)</h3>
@@ -609,7 +672,7 @@ ANALYTICS_PAGE_HTML = """
 """
 
 # ===================================================================== #
-# SECTION 2: UTILITIES & TEXT SPLITTING ALGORITHM                       #
+# SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                       #
 # ===================================================================== #
 
 def split_comments_smart(text):
@@ -622,6 +685,26 @@ def split_comments_smart(text):
     )
     segments = re.split(pattern, text, flags=re.IGNORECASE)
     return [seg.strip() for seg in segments if seg.strip()]
+
+
+def get_mistral_embeddings(text):
+    url = "https://api.mistral.ai/v1/embeddings"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "mistral-embed",
+        "input": [str(text)]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 200:
+            return response.json()["data"][0]["embedding"]
+        else:
+            return None
+    except Exception:
+        return None
 
 # ===================================================================== #
 # SECTION 3: APPS CONTROLLER ENGINE & ROUTING                           #
@@ -675,7 +758,7 @@ def split_dataframe():
         df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
         df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
         session['cached_processed'] = df_exploded.to_dict(orient='records')
-        session.pop('processed_was_overridden', None) # Clear out override tracking on native re-process
+        session.pop('processed_was_overridden', None)
         
         return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
     except Exception as e:
@@ -743,7 +826,6 @@ def submit_uploaded_file():
     except Exception as e:
         return f"Error analyzing data structure: {str(e)}", 500
 
-# --- NEW ROUTE: INJECT TESTING OVERRIDE FOR EXPLODED VOICE SNAPSHOT ---
 @app.route("/upload-manager/override-processed", methods=["POST"])
 def override_processed_data():
     if 'mock_processed_csv' not in request.files:
@@ -840,7 +922,7 @@ def generate_tactics():
     except Exception as e:
         return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
 
-# --- ROUTE: ANALYTICS ---
+# --- ROUTE: ANALYTICS HUB VIEW ---
 @app.route("/analytics")
 def analytics():
     raw_session = session.get('cached_raw', [])
@@ -853,14 +935,195 @@ def analytics():
     processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     
+    similarity_results_table = session.get('similarity_results_html', None)
+    bar_plot_base64 = session.get('bar_plot_img', None)
+    wordcloud_base64 = session.get('wordcloud_img', None)
+    
     return render_template_string(
         ANALYTICS_PAGE_HTML,
         raw_table=raw_table,
         processed_table=processed_table,
         uploaded_table=uploaded_table,
         blueprint_table=blueprint_table,
-        was_overridden=was_overridden
+        was_overridden=was_overridden,
+        similarity_results_table=similarity_results_table,
+        bar_plot_base64=bar_plot_base64,
+        wordcloud_base64=wordcloud_base64
     )
+
+# --- ROUTE: CLEAR METRICS RESULTS_DF TARGET HOOK ---
+@app.route("/analytics/clear-metrics", methods=["POST"])
+def clear_metrics_dataframe():
+    session.pop('similarity_results_html', None)
+    session.pop('bar_plot_img', None)
+    session.pop('wordcloud_img', None)
+    return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
+
+# --- ROUTE: VECTOR SIMILARITY ENGINE & INLINE PLOT CONVERTER ---
+@app.route("/analytics/compute-metrics", methods=["POST"])
+def compute_metrics():
+    processed_session = session.get('cached_processed', [])
+    uploaded_session = session.get('cached_uploaded', [])
+    blueprint_html = session.get('cached_blueprint', None)
+    
+    if not processed_session:
+        return "Error: Processed Player Evaluations dataset frame missing.", 400
+    if not uploaded_session and not blueprint_html:
+        return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
+
+    # 1. Align Player Evaluation Frame
+    player_evals_df = pd.DataFrame(processed_session)
+    if 'Player' not in player_evals_df.columns:
+        player_evals_df['Player'] = player_evals_df['Transcript'].apply(
+            lambda x: re.search(r'(player\s+\d+|\d+)', str(x), re.I).group(1) if re.search(r'(player\s+\d+|\d+)', str(x), re.I) else "Unknown"
+        )
+    if 'Description' not in player_evals_df.columns:
+        player_evals_df['Description'] = player_evals_df['Transcript']
+
+    # 2. Align Ideal Position Target Frame
+    if uploaded_session:
+        ideal_player_df = pd.DataFrame(uploaded_session)
+    else:
+        try:
+            ideal_player_df = pd.read_html(blueprint_html)[0]
+        except Exception:
+            return "Error parsing system blueprint data frames.", 500
+
+    if len(ideal_player_df.columns) >= 2:
+        ideal_player_df.columns = ['Position', 'Description']
+
+    try:
+        # 3. Compute Embeddings & Sim scoring Matrix
+        player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
+        ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
+
+        similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
+        similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
+
+        top_players_per_position = {}
+        for position in similarity_df.columns:
+            top_players = similarity_df[position].sort_values(ascending=False).head(3)
+            top_players_per_position[position] = top_players
+
+        results = []
+        for position, players in top_players_per_position.items():
+            for player, score in players.items():
+                results.append({
+                    "Position": position,
+                    "Player": player,
+                    "Confidence Score": round(float(score), 4),
+                })
+
+        results_df = pd.DataFrame(results)
+        results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
+        session['similarity_results_html'] = results_df.to_html(classes='table', index=False)
+
+        # ===================================================================== #
+        # VISUALIZATION ENGINE 1: MATPLOTLIB CONFIDENCE HORIZONTAL BARS        #
+        # ===================================================================== #
+        positions = results_df['Position'].unique()
+        ncols_bar = min(3, len(positions)) if len(positions) > 0 else 1
+        nrows_bar = math.ceil(len(positions) / ncols_bar)
+        
+        fig_bar, axes_bar = plt.subplots(nrows=nrows_bar, ncols=ncols_bar, figsize=(ncols_bar * 4.5, nrows_bar * 4), squeeze=False)
+        axes_flat_bar = axes_bar.flatten()
+        colors_palette = ['#1f77b4', '#2ca02c', '#9467bd']
+
+        for i, position in enumerate(positions):
+            if i >= len(axes_flat_bar): break
+            position_data = results_df[results_df['Position'] == position].sort_values(by='Confidence Score', ascending=True)
+            
+            bars = axes_flat_bar[i].barh(
+                position_data['Player'], 
+                position_data['Confidence Score'], 
+                color=colors_palette[i % len(colors_palette)],
+                height=0.5,
+                edgecolor='black',
+                linewidth=1
+            )
+            
+            axes_flat_bar[i].set_title(f"Top Players: {position}", fontsize=13, pad=10, weight='bold')
+            axes_flat_bar[i].set_xlim(0, 1.0)
+            axes_flat_bar[i].set_xlabel('Confidence Score', fontsize=10)
+            axes_flat_bar[i].grid(axis='x', linestyle='--', alpha=0.5)
+            
+            for bar in bars:
+                width = bar.get_width()
+                axes_flat_bar[i].text(
+                    max(width - 0.15, 0.05),
+                    bar.get_y() + bar.get_height()/2, 
+                    f'{width:.2f}', 
+                    ha='center', va='center', color='white', weight='bold', fontsize=10
+                )
+                
+            for spine in axes_flat_bar[i].spines.values():
+                spine.set_visible(True)
+                spine.set_color('black')
+                spine.set_linewidth(1.2)
+
+        for j in range(len(positions), len(axes_flat_bar)):
+            axes_flat_bar[j].axis('off')
+
+        plt.tight_layout()
+        
+        # Stream raw bytes into string memory format buffers instead of hitting disk or show routines
+        buf_bar = io.BytesIO()
+        plt.savefig(buf_bar, format='png', bbox_inches='tight')
+        buf_bar.seek(0)
+        session['bar_plot_img'] = base64.b64encode(buf_bar.getvalue()).decode('utf-8')
+        plt.close(fig_bar)
+
+        # ===================================================================== #
+        # VISUALIZATION ENGINE 2: WORD CLOUD MATRIX PLOT                        #
+        # ===================================================================== #
+        player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
+        players = list(player_text.keys())
+
+        if players:
+            ncols_wc = 3  
+            nrows_wc = math.ceil(len(players) / ncols_wc)
+
+            fig_wc, axes_wc = plt.subplots(nrows=nrows_wc, ncols=ncols_wc, figsize=(ncols_wc * 5, nrows_wc * 3.5), squeeze=False)
+            axes_flat_wc = axes_wc.flatten()
+            stopwords = set(STOPWORDS)
+
+            for i, player in enumerate(players):
+                if i >= len(axes_flat_wc): break
+                text = player_text[player]
+                
+                wordcloud = WordCloud(
+                    width=500, 
+                    height=350, 
+                    background_color='white', 
+                    stopwords=stopwords,
+                    min_font_size=10
+                ).generate(text)
+                
+                axes_flat_wc[i].imshow(wordcloud, interpolation='bilinear') 
+                axes_flat_wc[i].set_title(f"Word Cloud for {player}", fontsize=12, pad=8)
+                
+                axes_flat_wc[i].set_xticks([])
+                axes_flat_wc[i].set_yticks([])
+                for spine in axes_flat_wc[i].spines.values():
+                    spine.set_visible(True)
+                    spine.set_color('black')       
+                    spine.set_linewidth(1.5)       
+
+            for j in range(len(players), len(axes_flat_wc)):
+                axes_flat_wc[j].axis('off')
+
+            plt.tight_layout()
+            
+            buf_wc = io.BytesIO()
+            plt.savefig(buf_wc, format='png', bbox_inches='tight')
+            buf_wc.seek(0)
+            session['wordcloud_img'] = base64.b64encode(buf_wc.getvalue()).decode('utf-8')
+            plt.close(fig_wc)
+
+        return render_template_string("<h3>Matrix Calculations Completed!</h3><script>window.location.href='/analytics';</script>")
+        
+    except Exception as e:
+        return f"Execution processing failure: {str(e)}", 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
