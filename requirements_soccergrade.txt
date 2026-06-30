@@ -3,3 +3,4 @@ gunicorn==22.0.0
 pandas>=2.0.0
 mistralai>=2.0.0
 requests
+scikit-learn==1.6.1
