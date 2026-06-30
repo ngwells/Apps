@@ -9,6 +9,14 @@ import pandas as pd
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
+# ===================================================================== #
+# CONFIGURATION: Ensure cookie expires when browser closes              #
+# ===================================================================== #
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+
 # Initialize Mistral Client from environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
@@ -35,6 +43,10 @@ LANDING_PAGE_HTML = """
         .card h3 { margin-top: 0; color: #007bff; font-size: 18px; }
         .card p { color: #555; font-size: 13px; line-height: 1.5; min-height: 60px; margin-bottom: 15px; }
         .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-weight: bold; align-self: flex-start; }
+        
+        .system-controls { margin-top: 50px; border-top: 1px solid #ddd; padding-top: 20px; }
+        .btn-reset-all { padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        .btn-reset-all:hover { background: #5a6268; }
     </style>
 </head>
 <body>
@@ -70,6 +82,22 @@ LANDING_PAGE_HTML = """
             <span class="badge">Insights</span>
         </a>
     </div>
+
+    <div class="system-controls">
+        <button class="btn-reset-all" onclick="clearFullSession()">Reset Environment Roster Cache</button>
+    </div>
+
+    <script>
+        function clearFullSession() {
+            if (confirm("Are you sure you want to completely flush all loaded dataframes, recordings, and generated files?")) {
+                fetch('/system/reset-session', { method: 'POST' })
+                .then(() => {
+                    alert("Cache context cleared successfully.");
+                    window.location.reload();
+                });
+            }
+        }
+    </script>
 </body>
 </html>
 """
@@ -370,9 +398,10 @@ LINEUP_PAGE_HTML = """
         .btn-format:hover { background: #e6f0ff; }
         .btn-format.active:hover { background: #007bff; }
         
-        .action-container { text-align: center; margin: 20px 0; }
-        .btn-execute { padding: 14px 40px; font-size: 15px; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }
+        .action-container { text-align: center; margin: 20px 0; display: flex; justify-content: center; gap: 15px; }
+        .btn-execute { padding: 14px 30px; font-size: 15px; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }
         .btn-execute:disabled { background: #ccc; cursor: not-allowed; box-shadow: none; }
+        .btn-clear-frame { padding: 14px 30px; font-size: 15px; font-weight: bold; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }
         
         .llm-response-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 20px; margin-top: 25px; min-height: 100px; }
         .llm-response-box table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
@@ -405,6 +434,7 @@ LINEUP_PAGE_HTML = """
 
         <div class="action-container">
             <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()" {% if not selected_format %}disabled{% endif %}>Execute Tactical Blueprint Generation</button>
+            <button type="button" id="clear-btn" class="btn-clear-frame" onclick="clearBlueprintFrame()">Clear Blueprint Table</button>
         </div>
 
         <div class="loader" id="loading-spinner">Processing context frames and executing Mistral matrix construction...</div>
@@ -478,6 +508,16 @@ LINEUP_PAGE_HTML = """
                 runButton.disabled = false;
                 responseAnchor.innerHTML = '<span style="color:#dc3545; font-weight:bold;">Network pipeline transmission breakdown.</span>';
             }
+        }
+
+        function clearBlueprintFrame() {
+            fetch('/create-lineup/clear-blueprint', { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if(data.status === 'success') {
+                    document.getElementById('response-anchor').innerHTML = '<span style="color:#999; font-style: italic;">No configuration structure generated. Select a match format above and click execute.</span>';
+                }
+            });
         }
     </script>
 </body>
@@ -570,6 +610,11 @@ def split_comments_smart(text):
 @app.route("/")
 def index():
     return render_template_string(LANDING_PAGE_HTML)
+
+@app.route("/system/reset-session", methods=["POST"])
+def reset_session():
+    session.clear()
+    return jsonify({"status": "cleared"})
 
 @app.route("/soccer-grade")
 def soccer_grade():
@@ -700,6 +745,11 @@ def select_format_sync():
     if req_body and 'format_type' in req_body:
         session['selected_format'] = req_body['format_type']
     return jsonify({"status": "format_cached"})
+
+@app.route("/create-lineup/clear-blueprint", methods=["POST"])
+def clear_blueprint():
+    session.pop('cached_blueprint', None)
+    return jsonify({"status": "success"})
 
 # --- ASYNC ROUTE: MISTRAL TACTICAL LLM PROMPT GENERATOR ---
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
