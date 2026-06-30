@@ -307,7 +307,7 @@ SOCCER_INTERFACE_HTML = """
 </html>
 """
 
-# --- PAGE C: DATA UPLOAD MANAGER ---
+# --- PAGE C: DATA UPLOAD MANAGER (WITH MOCK PROCESSED OVERRIDE DROPZONE) ---
 UPLOAD_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -325,8 +325,11 @@ UPLOAD_PAGE_HTML = """
         table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; }
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 12px; }
         th { background-color: #e9ecef; }
-        .upload-zone { border: 2px dashed #007bff; padding: 25px; text-align: center; background: #f8f9fa; border-radius: 6px; margin-top: 15px; }
-        input[type="file"] { margin-top: 10px; }
+        .upload-flex-grid { display: flex; gap: 20px; margin-top: 20px; }
+        .upload-zone { flex: 1; border: 2px dashed #007bff; padding: 20px; text-align: center; background: #f8f9fa; border-radius: 6px; }
+        .upload-zone.override { border-color: #dc3545; background: #fff5f5; }
+        input[type="file"] { margin-top: 10px; max-width: 100%; }
+        .badge-alert { background: #dc3545; color: white; padding: 3px 6px; font-size: 11px; font-weight: bold; border-radius: 4px; display: inline-block; margin-bottom: 5px; }
     </style>
 </head>
 <body>
@@ -355,8 +358,11 @@ UPLOAD_PAGE_HTML = """
             {% endif %}
         </div>
 
-        <h3>Voice Stream Snapshot (Processed & Exploded)</h3>
-        <div class="data-block">
+        <h3>
+            Voice Stream Snapshot (Processed & Exploded)
+            {% if was_overridden %}<span class="badge-alert">Testing Override Active</span>{% endif %}
+        </h3>
+        <div class="data-block" {% if was_overridden %}style="border-left: 4px solid #dc3545;"{% endif %}>
             {% if processed_data_table %}
                 {{ processed_data_table|safe }}
             {% else %}
@@ -364,13 +370,23 @@ UPLOAD_PAGE_HTML = """
             {% endif %}
         </div>
 
-        <h3>Upload Spreadsheet Metrics</h3>
-        <div class="upload-zone">
-            <form action="/upload-manager/submit-file" method="POST" enctype="multipart/form-data">
-                <label style="font-weight:bold; display:block;">Select CSV File to import:</label>
-                <input type="file" name="uploaded_csv" accept=".csv" required><br><br>
-                <button type="submit" style="padding:10px 20px; background:#28a745; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Analyze & Ingest File</button>
-            </form>
+        <div class="upload-flex-grid">
+            <div class="upload-zone">
+                <form action="/upload-manager/submit-file" method="POST" enctype="multipart/form-data">
+                    <label style="font-weight:bold; display:block; color:#0d47a1;">Upload Spreadsheet Metrics</label>
+                    <input type="file" name="uploaded_csv" accept=".csv" required><br><br>
+                    <button type="submit" style="padding:8px 16px; background:#28a745; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Ingest Standard File</button>
+                </form>
+            </div>
+
+            <div class="upload-zone override">
+                <form action="/upload-manager/override-processed" method="POST" enctype="multipart/form-data">
+                    <label style="font-weight:bold; display:block; color:#c0392b;">Sandbox Testing Mock</label>
+                    <span style="font-size: 11px; color: #7f8c8d; display:block; margin-bottom:5px;">Forces override of Processed & Exploded dataset frame</span>
+                    <input type="file" name="mock_processed_csv" accept=".csv" required><br><br>
+                    <button type="submit" style="padding:8px 16px; background:#dc3545; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Inject Test Override</button>
+                </form>
+            </div>
         </div>
     </div>
 </body>
@@ -544,6 +560,7 @@ ANALYTICS_PAGE_HTML = """
         th, td { border: 1px solid #dee2e6; padding: 8px; text-align: left; font-size: 12px; }
         th { background-color: #f8f9fa; position: sticky; top: 0; }
         .empty-text { color: #999; font-style: italic; font-size: 13px; }
+        .badge-alert { background: #dc3545; color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; }
     </style>
 </head>
 <body>
@@ -563,7 +580,10 @@ ANALYTICS_PAGE_HTML = """
             </div>
 
             <div class="section-box" style="border-left: 4px solid #6f42c1;">
-                <h3 style="margin-top:0; color:#6f42c1;">2. Exploded Roster Logs (Smart Split Comment Entities)</h3>
+                <h3 style="margin-top:0; color:#6f42c1;">
+                    2. Exploded Roster Logs (Smart Split Comment Entities)
+                    {% if was_overridden %}<span class="badge-alert">Testing Override Active</span>{% endif %}
+                </h3>
                 <div class="table-wrap">
                     {% if processed_table %} {{ processed_table|safe }} {% else %} <span class="empty-text">No exploded entity records broken out yet.</span> {% endif %}
                 </div>
@@ -655,6 +675,7 @@ def split_dataframe():
         df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
         df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
         session['cached_processed'] = df_exploded.to_dict(orient='records')
+        session.pop('processed_was_overridden', None) # Clear out override tracking on native re-process
         
         return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
     except Exception as e:
@@ -696,6 +717,7 @@ def upload_manager():
     raw_session = session.get('cached_raw', [])
     processed_session = session.get('cached_processed', [])
     uploaded_session = session.get('cached_uploaded', [])
+    was_overridden = session.get('processed_was_overridden', False)
     
     raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
     processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
@@ -704,7 +726,8 @@ def upload_manager():
     return render_template_string(UPLOAD_PAGE_HTML, 
                                   raw_data_table=raw_data_table, 
                                   processed_data_table=processed_data_table, 
-                                  uploaded_data_table=uploaded_data_table)
+                                  uploaded_data_table=uploaded_data_table,
+                                  was_overridden=was_overridden)
 
 @app.route("/upload-manager/submit-file", methods=["POST"])
 def submit_uploaded_file():
@@ -719,6 +742,22 @@ def submit_uploaded_file():
         return render_template_string("<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
     except Exception as e:
         return f"Error analyzing data structure: {str(e)}", 500
+
+# --- NEW ROUTE: INJECT TESTING OVERRIDE FOR EXPLODED VOICE SNAPSHOT ---
+@app.route("/upload-manager/override-processed", methods=["POST"])
+def override_processed_data():
+    if 'mock_processed_csv' not in request.files:
+        return "No file selected for testing override", 400
+    file = request.files['mock_processed_csv']
+    if file.filename == '':
+        return "Empty file selection", 400
+    try:
+        mock_df = pd.read_csv(file)
+        session['cached_processed'] = mock_df.to_dict(orient='records')
+        session['processed_was_overridden'] = True
+        return render_template_string("<h3>Testing Override Applied!</h3><p>Exploded database frame temporarily swapped.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
+    except Exception as e:
+        return f"Error applying template mock override: {str(e)}", 500
 
 # --- ROUTE: CREATE LINE UP ---
 @app.route("/create-lineup")
@@ -808,6 +847,7 @@ def analytics():
     processed_session = session.get('cached_processed', [])
     uploaded_session = session.get('cached_uploaded', [])
     blueprint_table = session.get('cached_blueprint', None)
+    was_overridden = session.get('processed_was_overridden', False)
     
     raw_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
     processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
@@ -818,7 +858,8 @@ def analytics():
         raw_table=raw_table,
         processed_table=processed_table,
         uploaded_table=uploaded_table,
-        blueprint_table=blueprint_table
+        blueprint_table=blueprint_table,
+        was_overridden=was_overridden
     )
 
 if __name__ == "__main__":
