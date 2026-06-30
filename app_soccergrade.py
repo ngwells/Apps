@@ -120,22 +120,34 @@ SOCCER_INTERFACE_HTML = """
             <button id="stop-btn" class="btn-stop" disabled>Stop & Process</button>
         </div>
         <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-            <button id="process-btn" class="btn-process" disabled>Split & Process Rows</button>
-            <button id="export-btn" class="btn-save" disabled>Export Raw CSV</button>
-            <button id="export-processed-btn" class="btn-save-processed" disabled>Export Processed CSV</button>
+            <button id="process-btn" class="btn-process" {% if not has_raw %}disabled{% endif %}>Split & Process Rows</button>
+            <button id="export-btn" class="btn-save" {% if not has_raw %}disabled{% endif %}>Export Raw CSV</button>
+            <button id="export-processed-btn" class="btn-save-processed" {% if not has_processed %}disabled{% endif %}>Export Processed CSV</button>
         </div>
         <div id="status">Status: Idle</div>
         <div class="flex-container">
             <div class="history-container">
                 <h3>Raw Transcripts:</h3>
                 <ul id="history-list" class="history-list">
-                    <li class="history-item" id="empty-state" style="color: #aaa; text-align:center;">No raw records yet.</li>
+                    {% if has_raw %}
+                        {% for row in raw_records %}
+                            <li class="history-item"><span class="timestamp">[{{ row.Timestamp }}]</span> {{ row.Transcript }}</li>
+                        {% endfor %}
+                    {% else %}
+                        <li class="history-item" id="empty-state" style="color: #aaa; text-align:center;">No raw records yet.</li>
+                    {% endif %}
                 </ul>
             </div>
             <div class="history-container">
                 <h3>Processed Lines:</h3>
                 <ul id="processed-list" class="history-list">
-                    <li class="history-item" id="empty-processed" style="color: #aaa; text-align:center;">No split data yet.</li>
+                    {% if has_processed %}
+                        {% for row in processed_records %}
+                            <li class="history-item"><span class="timestamp">[{{ row.Timestamp }}]</span> {{ row.Transcript }}</li>
+                        {% endfor %}
+                    {% else %}
+                        <li class="history-item" id="empty-processed" style="color: #aaa; text-align:center;">No split data yet.</li>
+                    {% endif %}
                 </ul>
             </div>
         </div>
@@ -151,19 +163,28 @@ SOCCER_INTERFACE_HTML = """
         const statusDiv = document.getElementById('status');
         const historyList = document.getElementById('history-list');
         const processedList = document.getElementById('processed-list');
-        let sessionRecords = [];
-        let processedRecords = [];
+        
+        // Hydrate arrays from initial page templates
+        let sessionRecords = {{ raw_records_json|safe }};
+        let processedRecords = {{ processed_records_json|safe }};
 
         function appendToSessionDOM(timestamp, transcript) {
             const emptyState = document.getElementById('empty-state');
             if (emptyState) emptyState.remove();
-            sessionRecords.push({ timestamp, transcript });
+            sessionRecords.push({ Timestamp: timestamp, Transcript: transcript });
             exportBtn.disabled = false;
             processBtn.disabled = false;
             const li = document.createElement('li');
             li.className = 'history-item';
             li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`;
             historyList.insertBefore(li, historyList.firstChild);
+
+            // Dynamically synchronize snapshot updates down to back-end cache frame
+            fetch('/soccer-grade/sync-raw', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: sessionRecords })
+            });
         }
 
         processBtn.addEventListener('click', async () => {
@@ -173,7 +194,7 @@ SOCCER_INTERFACE_HTML = """
                 const response = await fetch('/soccer-grade/split-dataframe', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ data: sessionRecords })
+                    body: JSON.stringify({ data: sessionRecords.map(r => ({ timestamp: r.Timestamp, transcript: r.Transcript })) })
                 });
                 const result = await response.json();
                 if (result.status === 'success') {
@@ -198,8 +219,8 @@ SOCCER_INTERFACE_HTML = """
         async function downloadCSV(records, filename) {
             let csvContent = "Timestamp,Transcript\\n";
             records.forEach(row => {
-                let text = row.transcript || row.Transcript || "";
-                let time = row.timestamp || row.Timestamp || "";
+                let text = row.Transcript || "";
+                let time = row.Timestamp || "";
                 let cleanTranscript = text.replace(/"/g, '""');
                 csvContent += `"${time}","${cleanTranscript}"\\n`;
             });
@@ -330,7 +351,7 @@ UPLOAD_PAGE_HTML = """
 </html>
 """
 
-# --- PAGE D: CREATE LINE UP INTERFACE (WITH TACTICAL FORMAT SELECTORS & MISTRAL AGENT) ---
+# --- PAGE D: CREATE LINE UP INTERFACE ---
 LINEUP_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -379,20 +400,24 @@ LINEUP_PAGE_HTML = """
 
         <h3 style="font-size: 16px; color:#333; border-bottom: 1px solid #eee; padding-bottom: 8px;">1. Select Roster Matrix Format</h3>
         <div class="format-selector">
-            <button type="button" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
-            <button type="button" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
-            <button type="button" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+            <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
+            <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
+            <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
         </div>
 
         <div class="action-container">
-            <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()" disabled>Execute Tactical Blueprint Generation</button>
+            <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()" {% if not selected_format %}disabled{% endif %}>Execute Tactical Blueprint Generation</button>
         </div>
 
         <div class="loader" id="loading-spinner">Processing context frames and executing Mistral matrix construction...</div>
 
         <h3 style="font-size: 16px; color:#333; margin-top: 30px;">2. Generated System Response Dataframe</h3>
         <div class="llm-response-box" id="response-anchor">
-            <span style="color:#999; font-style: italic;">No configuration structure generated. Select a match format above and click execute.</span>
+            {% if blueprint_table %}
+                {{ blueprint_table|safe }}
+            {% else %}
+                <span style="color:#999; font-style: italic;">No configuration structure generated. Select a match format above and click execute.</span>
+            {% endif %}
         </div>
         
         <div class="debug-panel">
@@ -406,7 +431,7 @@ LINEUP_PAGE_HTML = """
     </div>
 
     <script>
-        let selectedFormatName = "";
+        let selectedFormatName = "{{ selected_format|safe }}";
 
         function selectFormat(clickedButton, formatValue) {
             const buttons = document.querySelectorAll('.btn-format');
@@ -414,8 +439,14 @@ LINEUP_PAGE_HTML = """
             
             clickedButton.classList.add('active');
             selectedFormatName = formatValue;
-            
             document.getElementById('execute-btn').disabled = false;
+
+            // Notify backend of button click highlight retention
+            fetch('/create-lineup/select-format', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ format_type: formatValue })
+            });
         }
 
         async function runTacticalPrompt() {
@@ -538,7 +569,24 @@ def index():
 
 @app.route("/soccer-grade")
 def soccer_grade():
-    return render_template_string(SOCCER_INTERFACE_HTML)
+    raw_records = session.get('cached_raw', [])
+    processed_records = session.get('cached_processed', [])
+    return render_template_string(
+        SOCCER_INTERFACE_HTML,
+        has_raw=len(raw_records) > 0,
+        has_processed=len(processed_records) > 0,
+        raw_records=raw_records,
+        processed_records=processed_records,
+        raw_records_json=json.dumps(raw_records),
+        processed_records_json=json.dumps(processed_records)
+    )
+
+@app.route("/soccer-grade/sync-raw", methods=["POST"])
+def sync_raw():
+    req_data = request.get_json()
+    if req_data and 'data' in req_data:
+        session['cached_raw'] = req_data['data']
+    return jsonify({"status": "synchronized"})
 
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
@@ -630,35 +678,42 @@ def create_lineup():
     processed_session = session.get('cached_processed', [])
     uploaded_session = session.get('cached_uploaded', [])
     
+    selected_format = session.get('selected_format', '')
+    blueprint_table = session.get('cached_blueprint', None)
+    
     return render_template_string(
         LINEUP_PAGE_HTML,
         raw_count=len(raw_session),
         processed_count=len(processed_session),
-        uploaded_count=len(uploaded_session)
+        uploaded_count=len(uploaded_session),
+        selected_format=selected_format,
+        blueprint_table=blueprint_table
     )
 
-# --- NEW ASYNC ROUTE: MISTRAL TACTICAL LLM PROMPT GENERATOR ---
+@app.route("/create-lineup/select-format", methods=["POST"])
+def select_format_sync():
+    req_body = request.get_json()
+    if req_body and 'format_type' in req_body:
+        session['selected_format'] = req_body['format_type']
+    return jsonify({"status": "format_cached"})
+
+# --- ASYNC ROUTE: MISTRAL TACTICAL LLM PROMPT GENERATOR ---
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
     if not client:
-        return jsonify({"status": "error", "message": "Mistral API initialization key missing from system environment variables."}), 500
+        return jsonify({"status": "error", "message": "Mistral API initialization key missing."}), 500
         
     req_body = request.get_json()
     format_type = req_body.get("format_type", "11v11")
+    session['selected_format'] = format_type
     
-    # Extract session context pools to inject as raw programmatic support vectors if needed
-    raw_logs = session.get('cached_raw', [])
-    processed_logs = session.get('cached_processed', [])
-    uploaded_metrics = session.get('cached_uploaded', [])
-    
-    # Construct prompt requested by user with embedded constraints
     prompt_instruction = f"""
     give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position.
     
     CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text.
     Format Example:
     [
-      {{"position": "Goalkeeper (GK)", "narrative_description": "Exceptional shot-stopping reflexes akin to Lev Yashin, paired with modern distribution traits..."}}
+      {{"position": "Goalkeeper (GK)", "narrative_description": "Exceptional shot-stopping reflexes..."}}
     ]
     """
     
@@ -666,15 +721,13 @@ def generate_tactics():
         response_stream = client.chat.complete(
             model="mistral-large-latest",
             messages=[
-                {"role": "system", "content": "You are an advanced soccer tactics architect and sports data analyst. Output requested data exclusively as clean JSON arrays."},
+                {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
                 {"role": "user", "content": prompt_instruction}
             ],
             response_format={"type": "json_object"}
         )
         
         raw_content = response_stream.choices[0].message.content.strip()
-        
-        # Parse output data back into a neat pandas frame
         parsed_json = json.loads(raw_content)
         if isinstance(parsed_json, dict) and len(parsed_json.keys()) == 1:
             key = list(parsed_json.keys())[0]
@@ -683,11 +736,13 @@ def generate_tactics():
             parsed_list = parsed_json
             
         df_output = pd.DataFrame(parsed_list)
-        # Verify columns exist or assign cleanly
         if len(df_output.columns) >= 2:
             df_output.columns = ['Position', 'Narrative Description Summary']
             
         html_table = df_output.to_html(classes='table', index=False)
+        
+        # Save output into session context cache block
+        session['cached_blueprint'] = html_table
         return jsonify({"status": "success", "html_payload": html_table})
         
     except Exception as e:
@@ -710,10 +765,6 @@ def analytics():
         processed_table=processed_table,
         uploaded_table=uploaded_table
     )
-
-@app.route("/trading-dashboard")
-def trading_dashboard():
-    return "<h3>Trading Dashboard Sandbox</h3><a href='/'>← Back Hub</a>"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
