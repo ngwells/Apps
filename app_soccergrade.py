@@ -1,13 +1,22 @@
 import datetime
+import io
 import json
+import math
 import os
 import re
+import base64
 from flask import Flask, jsonify, request, render_template_string, session
 from mistralai.client import Mistral
 import numpy as np
 import pandas as pd
 import requests
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Force matplotlib to use a non-interactive backend for server-side background processing
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud, STOPWORDS
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
@@ -568,6 +577,9 @@ ANALYTICS_PAGE_HTML = """
         .btn-metric:hover { background: #1b5e20; }
         .btn-clear-metrics { background: #dc3545; color: white; border: none; padding: 10px 20px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
         .btn-clear-metrics:hover { background: #bd2130; }
+        
+        .plot-container { text-align: center; margin-top: 20px; padding: 15px; background: white; border: 1px solid #ddd; border-radius: 6px; }
+        .plot-img { max-width: 100%; height: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -581,7 +593,7 @@ ANALYTICS_PAGE_HTML = """
         <div class="metric-banner">
             <div>
                 <strong style="color:#222; display:block; font-size:15px;">Semantic Player-to-Position Evaluation System</strong>
-                <span style="font-size:12px; color:#666;">Triggers Mistral Vector Embeddings, Cosine Similarity calculations, and populates results_df.</span>
+                <span style="font-size:12px; color:#666;">Calculates Cosine Similarity matrices, renders tabular metrics, and builds fast player word clouds.</span>
             </div>
             <div class="action-cluster">
                 <form action="/analytics/compute-metrics" method="POST" style="margin:0;">
@@ -596,8 +608,18 @@ ANALYTICS_PAGE_HTML = """
         {% if similarity_results_table %}
         <div class="section-box" style="border-left: 4px solid #2e7d32; margin-bottom:25px; background: #fbfdfb;">
             <h3 style="margin-top:0; color:#2e7d32;">🎯 Top Position Fit Recommendations (results_df)</h3>
-            <div class="table-wrap" style="max-height: 350px;">
+            <div class="table-wrap" style="max-height: 250px;">
                 {{ similarity_results_table|safe }}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if wordcloud_base64 %}
+        <div class="section-box" style="border-left: 4px solid #9467bd; margin-bottom:25px;">
+            <h3 style="margin-top:0; color:#9467bd;">📊 High-Speed Data Visualizations</h3>
+            <div class="plot-container">
+                <h4 style="margin-top:0; text-align:left; color:#333;">Player Narrative Token Frequencies (Word Clouds)</h4>
+                <img class="plot-img" src="data:image/png;base64,{{ wordcloud_base64 }}" alt="Player Descriptions Word Cloud Grid">
             </div>
         </div>
         {% endif %}
@@ -661,6 +683,8 @@ def get_mistral_embeddings(text):
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
+    
+    # Safety: Hard truncate inputs to 1,000 characters max to remain well beneath strict Cloudflare header/payload thresholds
     clean_text = str(text)[:1000] if text else "Empty text node frame"
     payload = {
         "model": "mistral-embed",
@@ -685,7 +709,7 @@ def get_mistral_embeddings(text):
 
 
 def fix_misspelled_position_header(df):
-    """Finds a column header closely resembling 'position' via simple character sequence evaluation."""
+    """Finds a column header closely resembling 'position' via character coverage tracking."""
     target = "position"
     best_col = None
     max_matches = 0
@@ -694,7 +718,6 @@ def fix_misspelled_position_header(df):
         col_str = str(col).lower().strip()
         if col_str == target:
             return df
-        # Simple character matching sequence ratio
         matches = sum(1 for char in target if char in col_str)
         if matches > max_matches and len(col_str) >= 4:
             max_matches = matches
@@ -933,6 +956,7 @@ def analytics():
     processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     similarity_results_table = session.get('similarity_results_html', None)
+    wordcloud_base64 = session.get('wordcloud_img', None)
     
     return render_template_string(
         ANALYTICS_PAGE_HTML,
@@ -941,12 +965,14 @@ def analytics():
         uploaded_table=uploaded_table,
         blueprint_table=blueprint_table,
         was_overridden=was_overridden,
-        similarity_results_table=similarity_results_table
+        similarity_results_table=similarity_results_table,
+        wordcloud_base64=wordcloud_base64
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
 def clear_metrics_dataframe():
     session.pop('similarity_results_html', None)
+    session.pop('wordcloud_img', None)
     return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
 
 # --- ROUTE: VECTOR SIMILARITY ENGINE & RESULTS_DF STRUCT BUILDER ---
@@ -992,14 +1018,12 @@ def compute_metrics():
             ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
 
     try:
-        # 3. Compute Embeddings
+        # 3. Compute Embeddings via internal proxy config
         player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
         ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
 
         # 4. Process Cosine Similarity Matrix Mapping
         similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
-        
-        # Lock position target strictly from ideal file attributes
         similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
 
         # 5. Group by Position and pull top 3 candidates ranked by vector matching score
@@ -1019,14 +1043,67 @@ def compute_metrics():
 
         results_df = pd.DataFrame(results)
         
-        # Enforce column sorting rules: Sorted explicitly by position blocks, then structural score confidence cascading down
+        # Enforce sorting metrics: sorted explicitly by position blocks, then structural score cascading down
         results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
-        
-        # Enforce exact structural column presentation configuration layout: position, score, player
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         
-        # Save table into context session layout
+        # Save results_df table into context session layout
         session['similarity_results_html'] = results_df.to_html(classes='table', index=False)
+
+        # ===================================================================== #
+        # VISUALIZATION ENGINE: LIGHTNING FAST WORD CLOUD MATRIX PLOT          #
+        # ===================================================================== #
+        player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
+        players = list(player_text.keys())
+
+        if players:
+            ncols_wc = 3  
+            nrows_wc = math.ceil(len(players) / ncols_wc)
+
+            fig_wc, axes_wc = plt.subplots(nrows=nrows_wc, ncols=ncols_wc, figsize=(ncols_wc * 4, nrows_wc * 3), squeeze=False)
+            axes_flat_wc = axes_wc.flatten()
+            stopwords = set(STOPWORDS)
+
+            for i, player in enumerate(players):
+                if i >= len(axes_flat_wc): break
+                
+                # Fast Pre-Filter Tokenizer: drops syntax fragments, filters out short strings
+                raw_text = player_text[player]
+                clean_tokens = " ".join(re.findall(r'\b\w{4,}\b', raw_text.lower()))
+                
+                # Optimized packing layout constraints to maximize memory execution throughput
+                wordcloud = WordCloud(
+                    width=260,          
+                    height=180,         
+                    max_words=25,       # STRICT CONSTRAINT: fixes collision loop delays
+                    background_color='white', 
+                    stopwords=stopwords,
+                    min_font_size=8,
+                    prefer_horizontal=0.8
+                ).generate(clean_tokens)
+                
+                axes_flat_wc[i].imshow(wordcloud, interpolation='bilinear') 
+                axes_flat_wc[i].set_title(f"Word Cloud for {player}", fontsize=11, pad=6)
+                
+                axes_flat_wc[i].set_xticks([])
+                axes_flat_wc[i].set_yticks([])
+                for spine in axes_flat_wc[i].spines.values():
+                    spine.set_visible(True)
+                    spine.set_color('black')       
+                    spine.set_linewidth(1.2)       
+
+            for j in range(len(players), len(axes_flat_wc)):
+                axes_flat_wc[j].axis('off')
+
+            plt.tight_layout()
+            
+            # Pipe straight out into base64 session layers rather than creating heavy disk IO operations
+            buf_wc = io.BytesIO()
+            plt.savefig(buf_wc, format='png', dpi=90, bbox_inches='tight')
+            buf_wc.seek(0)
+            session['wordcloud_img'] = base64.b64encode(buf_wc.getvalue()).decode('utf-8')
+            plt.close(fig_wc)
+
         return render_template_string("<h3>Matrix Calculations Completed!</h3><script>window.location.href='/analytics';</script>")
         
     except Exception as e:
