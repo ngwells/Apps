@@ -40,7 +40,7 @@ LANDING_PAGE_HTML = """
         body { font-family: Arial, sans-serif; max-width: 1000px; margin: 60px auto; background: #f4f6f9; text-align: center; color: #333; }
         h1 { margin-bottom: 10px; color: #222; }
         .subtitle { color: #666; margin-bottom: 40px; font-size: 16px; font-weight: bold; }
-        .grid { display: flex; justify-content: center; gap: 25px; flex-wrap: wrap; padding: 0 commute; 0 20px; }
+        .grid { display: flex; justify-content: center; gap: 25px; flex-wrap: wrap; padding: 0 20px; }
         .card { background: white; width: 200px; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; display: flex; flex-direction: column; justify-content: space-between; }
         .card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
         .card h3 { margin-top: 0; color: #007bff; font-size: 18px; }
@@ -661,17 +661,13 @@ def get_mistral_embeddings(text):
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
-    
-    # Safety: Hard truncate inputs to 1,000 characters max to remain well beneath strict Cloudflare header/payload thresholds
     clean_text = str(text)[:1000] if text else "Empty text node frame"
-    
     payload = {
         "model": "mistral-embed",
         "input": [clean_text]
     }
     
     import time
-    # Implement clean exponential backoff handler loops to safely process transient proxy error drops
     for attempt in range(3):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -686,6 +682,27 @@ def get_mistral_embeddings(text):
             time.sleep(1 + attempt)
             continue
     return None
+
+
+def fix_misspelled_position_header(df):
+    """Finds a column header closely resembling 'position' via simple character sequence evaluation."""
+    target = "position"
+    best_col = None
+    max_matches = 0
+    
+    for col in df.columns:
+        col_str = str(col).lower().strip()
+        if col_str == target:
+            return df
+        # Simple character matching sequence ratio
+        matches = sum(1 for char in target if char in col_str)
+        if matches > max_matches and len(col_str) >= 4:
+            max_matches = matches
+            best_col = col
+            
+    if best_col is not None and max_matches >= 5:
+        df.rename(columns={best_col: "Position"}, inplace=True)
+    return df
 
 # ===================================================================== #
 # SECTION 3: APPS CONTROLLER ENGINE & ROUTING                           #
@@ -953,7 +970,7 @@ def compute_metrics():
     if 'Description' not in player_evals_df.columns:
         player_evals_df['Description'] = player_evals_df['Transcript']
 
-    # 2. Align Ideal Position Target Frame (ideal_player_df)
+    # 2. Align Ideal Position Target Frame (ideal_player_df) From Tab
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
     else:
@@ -962,19 +979,30 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
 
-    if len(ideal_player_df.columns) >= 2:
-        ideal_player_df.columns = ['Position', 'Description']
+    # Execute fuzzy spelling matcher for Position header
+    ideal_player_df = fix_misspelled_position_header(ideal_player_df)
+
+    # Standardize column contexts
+    if 'Position' not in ideal_player_df.columns:
+        if len(ideal_player_df.columns) >= 1:
+            ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
+            
+    if 'Description' not in ideal_player_df.columns:
+        if len(ideal_player_df.columns) >= 2:
+            ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
 
     try:
-        # 3. Compute Embeddings via internal proxy config
+        # 3. Compute Embeddings
         player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
         ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
 
-        # 4. Process Cosine Similarity Matrix Closure Mapping
+        # 4. Process Cosine Similarity Matrix Mapping
         similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
+        
+        # Lock position target strictly from ideal file attributes
         similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
 
-        # 5. Group and Filter top 3 highest alignment score nodes per column space
+        # 5. Group by Position and pull top 3 candidates ranked by vector matching score
         top_players_per_position = {}
         for position in similarity_df.columns:
             top_players = similarity_df[position].sort_values(ascending=False).head(3)
@@ -985,12 +1013,17 @@ def compute_metrics():
             for player, score in players.items():
                 results.append({
                     "Position": position,
-                    "Player": player,
                     "Confidence Score": round(float(score), 4),
+                    "Player": player
                 })
 
         results_df = pd.DataFrame(results)
+        
+        # Enforce column sorting rules: Sorted explicitly by position blocks, then structural score confidence cascading down
         results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
+        
+        # Enforce exact structural column presentation configuration layout: position, score, player
+        results_df = results_df[["Position", "Confidence Score", "Player"]]
         
         # Save table into context session layout
         session['similarity_results_html'] = results_df.to_html(classes='table', index=False)
