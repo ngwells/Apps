@@ -5,3 +5,4 @@ mistralai
 requests==2.34.2
 scikit-learn>=1.0,<1.6.0
 wordcloud==1.9.4
+gunicorn==23.0.0  
