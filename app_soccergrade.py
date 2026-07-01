@@ -7,7 +7,7 @@ import re
 import base64
 from flask import Flask, jsonify, request, render_template_string, session
 from flask_caching import Cache
-from mistralai import Mistral
+from mistralai.client import Mistral
 import numpy as np
 import pandas as pd
 import requests
