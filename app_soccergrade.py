@@ -1107,7 +1107,7 @@ def compute_metrics():
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
         
         # =======================================================
-        # NEW: Generate Fast, Responsive Bar Charts
+        # Generate Fast, Responsive Bar Charts
         # =======================================================
         positions = list(top_players_per_position.keys())
         if positions:
@@ -1128,18 +1128,18 @@ def compute_metrics():
                 ax.set_title(f"Top Fits: {position}", fontsize=11, pad=6)
                 ax.set_ylim(0, 1.0) # Cosine similarity bound
                 
-                # Add the confidence score labels on top of the bars
+                # Add the confidence score labels on top of the bars (Forced to string to prevent float loops)
                 for bar in bars:
                     yval = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, round(yval, 3), ha='center', va='bottom', fontsize=9)
+                    ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, f"{yval:.3f}", ha='center', va='bottom', fontsize=9)
                     
             # Clear off any empty subplots in the grid
             for j in range(len(positions), len(axes_flat_bar)):
                 axes_flat_bar[j].axis('off')
                 
-            plt.tight_layout()
+            fig_bar.tight_layout() # Use object-oriented layout constraint
             buf_bar = io.BytesIO()
-            plt.savefig(buf_bar, format='png', dpi=90, bbox_inches='tight') # dpi=90 ensures fast rendering
+            fig_bar.savefig(buf_bar, format='png', dpi=90) # Removed conflicting bbox_inches='tight'
             buf_bar.seek(0)
             cache.set('barchart_img', base64.b64encode(buf_bar.getvalue()).decode('utf-8'))
             plt.close(fig_bar)
@@ -1171,12 +1171,14 @@ def compute_metrics():
                     spine.set_visible(True)
                     spine.set_color('black')
                     spine.set_linewidth(1.2)
+                    
+            # Clear off any empty subplots in the grid
             for j in range(len(players), len(axes_flat_wc)):
                 axes_flat_wc[j].axis('off')
-            plt.tight_layout()
             
+            fig_wc.tight_layout() # Use object-oriented layout constraint
             buf_wc = io.BytesIO()
-            plt.savefig(buf_wc, format='png', dpi=90, bbox_inches='tight')
+            fig_wc.savefig(buf_wc, format='png', dpi=90) # Removed conflicting bbox_inches='tight'
             buf_wc.seek(0)
             cache.set('wordcloud_img', base64.b64encode(buf_wc.getvalue()).decode('utf-8'))
             plt.close(fig_wc)
