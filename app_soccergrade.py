@@ -12,11 +12,6 @@ import numpy as np
 import pandas as pd
 import requests
 from sklearn.metrics.pairwise import cosine_similarity
-
-# Force matplotlib to use a non-interactive backend for server-side background processing
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from wordcloud import WordCloud, STOPWORDS
 
 app = Flask(__name__)
@@ -24,7 +19,6 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automat
 
 # ===================================================================== #
 # BACKEND FIX: Server-Side Cache Configuration                          #
-# Saves cookie payloads from ballooning by keeping dataframes on server #
 # ===================================================================== #
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
@@ -42,7 +36,6 @@ client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # ===================================================================== #
 # SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                      #
-# Completely overhauled for modern responsive Mobile/Desktop UI         #
 # ===================================================================== #
 
 # --- COMMON STYLES AND RESPONSIVE GRID CONFIGURATION ---
@@ -109,7 +102,7 @@ SHARED_CSS = """
     }
     
     button, .btn-link {
-        flex: 1 1 calc(50% - 10px); /* 2 per row on mobile */
+        flex: 1 1 calc(50% - 10px);
         min-width: 140px;
         padding: 12px 18px;
         font-size: 14px;
@@ -125,7 +118,7 @@ SHARED_CSS = """
     @media (min-width: 768px) {
         body { padding: 30px; }
         .container { padding: 40px; }
-        button, .btn-link { flex: 0 1 auto; } /* Normal distribution on desktop */
+        button, .btn-link { flex: 0 1 auto; }
     }
     
     button:disabled { background: #ccc !important; cursor: not-allowed; transform: none !important; }
@@ -155,6 +148,43 @@ SHARED_CSS = """
     }
     
     th { background-color: #f8f9fa; position: sticky; top: 0; }
+    
+    /* Fully Responsive Grid for Plots */
+    .responsive-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+    }
+    
+    .plot-card {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .plot-card h4 {
+        margin: 0 0 10px 0;
+        font-size: 14px;
+        color: #333;
+    }
+    
+    /* Forces chart.js canvas to resize correctly */
+    .chart-container {
+        position: relative;
+        height: 200px;
+        width: 100%;
+    }
+    
+    .plot-card img {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+    }
 </style>
 """
 
@@ -274,7 +304,6 @@ SOCCER_INTERFACE_HTML = """<!DOCTYPE html>
         
         #status { margin: 20px 0; font-weight: bold; color: #555; text-align: center; }
         
-        /* Two-column responsive breakdown layout */
         .flex-container {
             display: grid;
             grid-template-columns: 1fr;
@@ -690,10 +719,9 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
             .metric-banner { display: flex; align-items: center; justify-content: space-between; }
             .metric-banner button { width: auto; margin-top: 0; }
         }
-        .plot-container { text-align: center; margin-top: 15px; padding: 15px; background: white; border: 1px solid #ddd; border-radius: 8px; }
-        .plot-img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0 auto; }
         .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="back-nav">
@@ -724,20 +752,63 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </div>
         {% endif %}
 
-        {% if barchart_base64 %}
+        {% if barchart_data_json %}
         <div class="section-box" style="border-left: 4px solid #17a2b8;">
             <h3 style="color:#17a2b8;">📈 Top 3 Candidate Comparisons</h3>
-            <div class="plot-container">
-                <img class="plot-img" src="data:image/png;base64,{{ barchart_base64 }}" alt="Top Candidate Bar Charts">
-            </div>
+            <div class="responsive-grid" id="bar-charts-container"></div>
+            
+            <script>
+                const barchartData = {{ barchart_data_json|safe }};
+                const container = document.getElementById('bar-charts-container');
+                
+                barchartData.forEach((data, index) => {
+                    // Create Card structure
+                    const card = document.createElement('div');
+                    card.className = 'plot-card';
+                    card.innerHTML = `
+                        <h4>Top Fits: ${data.position}</h4>
+                        <div class="chart-container">
+                            <canvas id="chart-${index}"></canvas>
+                        </div>
+                    `;
+                    container.appendChild(card);
+                    
+                    // Render interactive chart
+                    const ctx = document.getElementById(`chart-${index}`).getContext('2d');
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.players,
+                            datasets: [{
+                                label: 'Confidence Score',
+                                data: data.scores,
+                                backgroundColor: '#17a2b8',
+                                borderColor: '#117a8b',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: { y: { beginAtZero: true, max: 1.0 } },
+                            plugins: { legend: { display: false } }
+                        }
+                    });
+                });
+            </script>
         </div>
         {% endif %}
 
-        {% if wordcloud_base64 %}
+        {% if wordcloud_data %}
         <div class="section-box" style="border-left: 4px solid #9467bd;">
             <h3 style="color:#9467bd;">📊 High-Speed Data Visualizations</h3>
-            <div class="plot-container">
-                <img class="plot-img" src="data:image/png;base64,{{ wordcloud_base64 }}" alt="Player Descriptions Word Cloud Grid">
+            <div class="responsive-grid">
+                {% for wc in wordcloud_data %}
+                <div class="plot-card">
+                    <h4>Word Cloud for {{ wc.player }}</h4>
+                    <img src="data:image/png;base64,{{ wc.img }}" alt="Word Cloud for {{ wc.player }}">
+                </div>
+                {% endfor %}
             </div>
         </div>
         {% endif %}
@@ -824,7 +895,6 @@ def fix_misspelled_position_header(df):
 
 # ===================================================================== #
 # SECTION 3: APPS CONTROLLER ENGINE & ROUTING                           #
-# Modified to pull/push from Server Cache instead of client Cookies     #
 # ===================================================================== #
 @app.route("/")
 def index():
@@ -1026,8 +1096,12 @@ def analytics():
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     
     similarity_results_table = cache.get('similarity_results_html')
-    barchart_base64 = cache.get('barchart_img')
-    wordcloud_base64 = cache.get('wordcloud_img')
+    
+    # Retrieve pre-processed chart data from cache
+    barchart_data = cache.get('barchart_data')
+    wordcloud_data = cache.get('wordcloud_data')
+    
+    barchart_data_json = json.dumps(barchart_data) if barchart_data else None
     
     return render_template_string(ANALYTICS_PAGE_HTML,
                                   raw_table=raw_table,
@@ -1036,15 +1110,15 @@ def analytics():
                                   blueprint_table=blueprint_table,
                                   was_overridden=was_overridden,
                                   similarity_results_table=similarity_results_table,
-                                  barchart_base64=barchart_base64,
-                                  wordcloud_base64=wordcloud_base64
+                                  barchart_data_json=barchart_data_json,
+                                  wordcloud_data=wordcloud_data
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
 def clear_metrics_dataframe():
     cache.delete('similarity_results_html')
-    cache.delete('barchart_img')
-    cache.delete('wordcloud_img')
+    cache.delete('barchart_data')
+    cache.delete('wordcloud_data')
     return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
 
 @app.route("/analytics/compute-metrics", methods=["POST"])
@@ -1107,81 +1181,48 @@ def compute_metrics():
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
         
         # =======================================================
-        # Generate Fast, Responsive Bar Charts
+        # Generate JSON Data for Frontend Chart.js Bar Charts
+        # (Replaces buggy Matplotlib logic entirely)
         # =======================================================
-        positions = list(top_players_per_position.keys())
-        if positions:
-            ncols_bar = 3
-            nrows_bar = math.ceil(len(positions) / ncols_bar)
-            fig_bar, axes_bar = plt.subplots(nrows=nrows_bar, ncols=ncols_bar, figsize=(ncols_bar * 4, nrows_bar * 3), squeeze=False)
-            axes_flat_bar = axes_bar.flatten()
-            
-            for i, position in enumerate(positions):
-                if i >= len(axes_flat_bar): break
-                
-                pos_data = top_players_per_position[position] # Already sorted descending by earlier logic
-                players_list = list(pos_data.index)
-                scores = list(pos_data.values)
-                
-                ax = axes_flat_bar[i]
-                bars = ax.bar(players_list, scores, color='#17a2b8', edgecolor='black')
-                ax.set_title(f"Top Fits: {position}", fontsize=11, pad=6)
-                ax.set_ylim(0, 1.0) # Cosine similarity bound
-                
-                # Add the confidence score labels on top of the bars (Forced to string to prevent float loops)
-                for bar in bars:
-                    yval = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, f"{yval:.3f}", ha='center', va='bottom', fontsize=9)
-                    
-            # Clear off any empty subplots in the grid
-            for j in range(len(positions), len(axes_flat_bar)):
-                axes_flat_bar[j].axis('off')
-                
-            fig_bar.tight_layout() # Use object-oriented layout constraint
-            buf_bar = io.BytesIO()
-            fig_bar.savefig(buf_bar, format='png', dpi=90) # Removed conflicting bbox_inches='tight'
-            buf_bar.seek(0)
-            cache.set('barchart_img', base64.b64encode(buf_bar.getvalue()).decode('utf-8'))
-            plt.close(fig_bar)
-        # =======================================================
+        barchart_data = []
+        for position, pos_data in top_players_per_position.items():
+            barchart_data.append({
+                "position": position,
+                "players": list(pos_data.index),
+                "scores": [round(float(v), 3) for v in pos_data.values]
+            })
+        cache.set('barchart_data', barchart_data)
         
+        # =======================================================
+        # Generate Native WordCloud Images (No Matplotlib Grid)
+        # =======================================================
         player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
-        players = list(player_text.keys())
-        if players:
-            ncols_wc = 3
-            nrows_wc = math.ceil(len(players) / ncols_wc)
-            fig_wc, axes_wc = plt.subplots(nrows=nrows_wc, ncols=ncols_wc, figsize=(ncols_wc * 4, nrows_wc * 3), squeeze=False)
-            axes_flat_wc = axes_wc.flatten()
-            stopwords = set(STOPWORDS)
+        stopwords = set(STOPWORDS)
+        wordcloud_data = []
+        
+        for player, raw_text in player_text.items():
+            clean_tokens = " ".join(re.findall(r'\b\w{4,}\b', raw_text.lower()))
+            if not clean_tokens.strip():
+                continue
+                
+            wc = WordCloud(
+                width=300, height=200, max_words=25,
+                background_color='white', stopwords=stopwords,
+                min_font_size=8, prefer_horizontal=0.8
+            ).generate(clean_tokens)
             
-            for i, player in enumerate(players):
-                if i >= len(axes_flat_wc): break
-                raw_text = player_text[player]
-                clean_tokens = " ".join(re.findall(r'\b\w{4,}\b', raw_text.lower()))
-                wordcloud = WordCloud(
-                    width=260, height=180, max_words=25,
-                    background_color='white', stopwords=stopwords,
-                    min_font_size=8, prefer_horizontal=0.8
-                ).generate(clean_tokens)
-                axes_flat_wc[i].imshow(wordcloud, interpolation='bilinear')
-                axes_flat_wc[i].set_title(f"Word Cloud for {player}", fontsize=11, pad=6)
-                axes_flat_wc[i].set_xticks([])
-                axes_flat_wc[i].set_yticks([])
-                for spine in axes_flat_wc[i].spines.values():
-                    spine.set_visible(True)
-                    spine.set_color('black')
-                    spine.set_linewidth(1.2)
-                    
-            # Clear off any empty subplots in the grid
-            for j in range(len(players), len(axes_flat_wc)):
-                axes_flat_wc[j].axis('off')
+            # Use native WordCloud to_image() method to bypass matplotlib
+            img = wc.to_image()
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
             
-            fig_wc.tight_layout() # Use object-oriented layout constraint
-            buf_wc = io.BytesIO()
-            fig_wc.savefig(buf_wc, format='png', dpi=90) # Removed conflicting bbox_inches='tight'
-            buf_wc.seek(0)
-            cache.set('wordcloud_img', base64.b64encode(buf_wc.getvalue()).decode('utf-8'))
-            plt.close(fig_wc)
+            wordcloud_data.append({
+                "player": player,
+                "img": b64
+            })
+            
+        cache.set('wordcloud_data', wordcloud_data)
             
         return render_template_string("<h3>Matrix Calculations Completed!</h3><script>window.location.href='/analytics';</script>")
     except Exception as e:
