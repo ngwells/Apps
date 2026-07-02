@@ -41,8 +41,8 @@ API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # ===================================================================== #
-# SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                    #
-# Completely overhauled for modern responsive Mobile/Desktop UI        #
+# SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                      #
+# Completely overhauled for modern responsive Mobile/Desktop UI         #
 # ===================================================================== #
 
 # --- COMMON STYLES AND RESPONSIVE GRID CONFIGURATION ---
@@ -724,6 +724,15 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </div>
         {% endif %}
 
+        {% if barchart_base64 %}
+        <div class="section-box" style="border-left: 4px solid #17a2b8;">
+            <h3 style="color:#17a2b8;">📈 Top 3 Candidate Comparisons</h3>
+            <div class="plot-container">
+                <img class="plot-img" src="data:image/png;base64,{{ barchart_base64 }}" alt="Top Candidate Bar Charts">
+            </div>
+        </div>
+        {% endif %}
+
         {% if wordcloud_base64 %}
         <div class="section-box" style="border-left: 4px solid #9467bd;">
             <h3 style="color:#9467bd;">📊 High-Speed Data Visualizations</h3>
@@ -1017,6 +1026,7 @@ def analytics():
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     
     similarity_results_table = cache.get('similarity_results_html')
+    barchart_base64 = cache.get('barchart_img')
     wordcloud_base64 = cache.get('wordcloud_img')
     
     return render_template_string(ANALYTICS_PAGE_HTML,
@@ -1026,12 +1036,14 @@ def analytics():
                                   blueprint_table=blueprint_table,
                                   was_overridden=was_overridden,
                                   similarity_results_table=similarity_results_table,
+                                  barchart_base64=barchart_base64,
                                   wordcloud_base64=wordcloud_base64
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
 def clear_metrics_dataframe():
     cache.delete('similarity_results_html')
+    cache.delete('barchart_img')
     cache.delete('wordcloud_img')
     return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
 
@@ -1093,6 +1105,45 @@ def compute_metrics():
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
+        
+        # =======================================================
+        # NEW: Generate Fast, Responsive Bar Charts
+        # =======================================================
+        positions = list(top_players_per_position.keys())
+        if positions:
+            ncols_bar = 3
+            nrows_bar = math.ceil(len(positions) / ncols_bar)
+            fig_bar, axes_bar = plt.subplots(nrows=nrows_bar, ncols=ncols_bar, figsize=(ncols_bar * 4, nrows_bar * 3), squeeze=False)
+            axes_flat_bar = axes_bar.flatten()
+            
+            for i, position in enumerate(positions):
+                if i >= len(axes_flat_bar): break
+                
+                pos_data = top_players_per_position[position] # Already sorted descending by earlier logic
+                players_list = list(pos_data.index)
+                scores = list(pos_data.values)
+                
+                ax = axes_flat_bar[i]
+                bars = ax.bar(players_list, scores, color='#17a2b8', edgecolor='black')
+                ax.set_title(f"Top Fits: {position}", fontsize=11, pad=6)
+                ax.set_ylim(0, 1.0) # Cosine similarity bound
+                
+                # Add the confidence score labels on top of the bars
+                for bar in bars:
+                    yval = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.02, round(yval, 3), ha='center', va='bottom', fontsize=9)
+                    
+            # Clear off any empty subplots in the grid
+            for j in range(len(positions), len(axes_flat_bar)):
+                axes_flat_bar[j].axis('off')
+                
+            plt.tight_layout()
+            buf_bar = io.BytesIO()
+            plt.savefig(buf_bar, format='png', dpi=90, bbox_inches='tight') # dpi=90 ensures fast rendering
+            buf_bar.seek(0)
+            cache.set('barchart_img', base64.b64encode(buf_bar.getvalue()).decode('utf-8'))
+            plt.close(fig_bar)
+        # =======================================================
         
         player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
         players = list(player_text.keys())
