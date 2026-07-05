@@ -48,6 +48,9 @@ SHARED_CSS = """
 
   gtag('config', 'G-W0VN6S115E');
 </script>
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369" crossorigin="anonymous"></script>
+
 <style>
  :root {--primary-color: #007bff; --success-color: #28a745; --danger-color: #dc3545; --info-color: #17a2b8; --purple-color: #6f42c1; --dark-bg: #f4f6f9; --card-bg: #ffffff; --text-main: #333333; }
  * { box-sizing: border-box; }
