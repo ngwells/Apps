@@ -17,9 +17,9 @@ from wordcloud import WordCloud, STOPWORDS
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
-# ===================================================================== #
-# BACKEND FIX: Server-Side Cache Configuration                          #
-# ===================================================================== #
+# =====================================================================
+# # BACKEND FIX: Server-Side Cache Configuration                          #
+# =====================================================================
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
@@ -34,157 +34,45 @@ app.config.update(
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
-# ===================================================================== #
-# SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                      #
-# ===================================================================== #
+# =====================================================================
+# # SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                      #
+# =====================================================================
 
 # --- COMMON STYLES AND RESPONSIVE GRID CONFIGURATION ---
 SHARED_CSS = """
-<style>
-    :root {
-        --primary-color: #007bff;
-        --success-color: #28a745;
-        --danger-color: #dc3545;
-        --info-color: #17a2b8;
-        --purple-color: #6f42c1;
-        --dark-bg: #f4f6f9;
-        --card-bg: #ffffff;
-        --text-main: #333333;
-    }
-    
-    * { box-sizing: border-box; }
-    
-    body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        margin: 0;
-        padding: 10px;
-        background: var(--dark-bg);
-        color: var(--text-main);
-        line-height: 1.5;
-    }
-    
-    .back-nav {
-        width: 100%;
-        max-width: 1100px;
-        margin: 10px auto;
-        text-align: left;
-    }
-    
-    .back-link {
-        text-decoration: none;
-        color: var(--primary-color);
-        font-weight: bold;
-        font-size: 14px;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-    }
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
 
-    .container {
-        background: var(--card-bg);
-        width: 100%;
-        max-width: 1100px;
-        margin: 10px auto 40px auto;
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    }
-    
-    h1, h2, h3, h4 { margin-top: 0; color: #111; }
-    
-    /* Responsive Buttons & Containers */
-    .btn-group {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin: 15px 0;
-        justify-content: center;
-    }
-    
-    button, .btn-link {
-        flex: 1 1 calc(50% - 10px);
-        min-width: 140px;
-        padding: 12px 18px;
-        font-size: 14px;
-        font-weight: bold;
-        cursor: pointer;
-        border: none;
-        border-radius: 8px;
-        transition: all 0.2s ease;
-        text-align: center;
-        display: inline-block;
-    }
-    
-    @media (min-width: 768px) {
-        body { padding: 30px; }
-        .container { padding: 40px; }
-        button, .btn-link { flex: 0 1 auto; }
-    }
-    
-    button:disabled { background: #ccc !important; cursor: not-allowed; transform: none !important; }
-    
-    /* Responsive Tables */
-    .table-wrap {
-        width: 100%;
-        overflow-x: auto;
-        margin-top: 15px;
-        border: 1px solid #dee2e6;
-        border-radius: 6px;
-        -webkit-overflow-scrolling: touch;
-    }
-    
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
-        white-space: nowrap;
-    }
-    
-    th, td {
-        border: 1px solid #dee2e6;
-        padding: 10px 14px;
-        text-align: left;
-        font-size: 13px;
-    }
-    
-    th { background-color: #f8f9fa; position: sticky; top: 0; }
-    
-    /* Fully Responsive Grid for Plots */
-    .responsive-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 20px;
-        margin-top: 15px;
-    }
-    
-    .plot-card {
-        background: #fff;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 15px;
-        text-align: center;
-        display: flex;
-        flex-direction: column;
-    }
-    
-    .plot-card h4 {
-        margin: 0 0 10px 0;
-        font-size: 14px;
-        color: #333;
-    }
-    
-    /* Forces chart.js canvas to resize correctly */
-    .chart-container {
-        position: relative;
-        height: 200px;
-        width: 100%;
-    }
-    
-    .plot-card img {
-        width: 100%;
-        height: auto;
-        border-radius: 4px;
-    }
+  gtag('config', 'G-W0VN6S115E');
+</script>
+<style>
+ :root {--primary-color: #007bff; --success-color: #28a745; --danger-color: #dc3545; --info-color: #17a2b8; --purple-color: #6f42c1; --dark-bg: #f4f6f9; --card-bg: #ffffff; --text-main: #333333; }
+ * { box-sizing: border-box; }
+ body {font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: var(--dark-bg); color: var(--text-main); line-height: 1.5; }
+ .back-nav {width: 100%; max-width: 1100px; margin: 10px auto; text-align: left; }
+ .back-link {text-decoration: none; color: var(--primary-color); font-weight: bold; font-size: 14px; display: inline-flex; align-items: center; gap: 5px; }
+ .container {background: var(--card-bg); width: 100%; max-width: 1100px; margin: 10px auto 40px auto; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+ h1, h2, h3, h4 { margin-top: 0; color: #111; }
+ /* Responsive Buttons & Containers */
+ .btn-group {display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0; justify-content: center; }
+ button, .btn-link {flex: 1 1 calc(50% - 10px); min-width: 140px; padding: 12px 18px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; border-radius: 8px; transition: all 0.2s ease; text-align: center; display: inline-block; }
+ @media (min-width: 768px) {body { padding: 30px; } .container { padding: 40px; } button, .btn-link { flex: 0 1 auto; } }
+ button:disabled { background: #ccc !important; cursor: not-allowed; transform: none !important; }
+ /* Responsive Tables */
+ .table-wrap {width: 100%; overflow-x: auto; margin-top: 15px; border: 1px solid #dee2e6; border-radius: 6px; -webkit-overflow-scrolling: touch; }
+ table {width: 100%; border-collapse: collapse; background: white; white-space: nowrap; }
+ th, td {border: 1px solid #dee2e6; padding: 10px 14px; text-align: left; font-size: 13px; }
+ th { background-color: #f8f9fa; position: sticky; top: 0; }
+ /* Fully Responsive Grid for Plots */
+ .responsive-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 15px; }
+ .plot-card {background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 15px; text-align: center; display: flex; flex-direction: column; }
+ .plot-card h4 {margin: 0 0 10px 0; font-size: 14px; color: #333; }
+ /* Forces chart.js canvas to resize correctly */
+ .chart-container {position: relative; height: 200px; width: 100%; }
+ .plot-card img {width: 100%; height: auto; border-radius: 4px; }
 </style>
 """
 
