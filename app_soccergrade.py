@@ -33,11 +33,92 @@ app.config.update(
 # Initialize Mistral Client securely using ONLY the system environment variable
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# Initialize Database using your specific environment variable
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_DB")
+db = SQLAlchemy(app)
+
+# --- User Model ---
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    first_name = db.Column(db.String(50))
+    last_name = db.Column(db.String(50))
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(256), nullable=False)
+
+with app.app_context():
+    db.create_all()
+
+# --- Auth Routes ---
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        user = User.query.filter_by(email=request.form.get("email")).first()
+        if user and check_password_hash(user.password, request.form.get("password")):
+            session["user_id"] = user.id
+            return redirect(url_for("index"))
+        return "Invalid credentials. <a href='/login'>Try again</a>"
+    
+    # Simple Login Page embedded
+    return render_template_string(LOGIN_PAGE_HTML)
+
+@app.route("/register", methods=["POST"])
+def register():
+    hashed_pw = generate_password_hash(request.form.get("password"))
+    new_user = User(
+        first_name=request.form.get("first_name"),
+        last_name=request.form.get("last_name"),
+        email=request.form.get("email"),
+        password=hashed_pw
+    )
+    db.session.add(new_user)
+    db.session.commit()
+    return redirect(url_for("login"))
+
+# Update your existing / route to check for session
+@app.route("/")
+def index():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    return render_template_string(LANDING_PAGE_HTML)
+
+
 
 # =====================================================================
 # # SECTION 1: HTML INTERFACES (FRONTEND UI LAYOUTS)                      #
 # =====================================================================
+LOGIN_PAGE_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>Soccer Grader Login</title></head>
+<body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
+    <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 300px; text-align: center;">
+        <h2>Soccer Grader Login</h2>
+        <form action="/login" method="POST">
+            <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
+            <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
+            <button type="submit" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Log In</button>
+        </form>
+        <p>Don't have an account? <a href="#" onclick="document.getElementById('reg-modal').style.display='block'">Create Account</a></p>
+    </div>
 
+    <div id="reg-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
+        <h3>Register</h3>
+        <form action="/register" method="POST">
+            <input type="text" name="first_name" placeholder="First Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <input type="text" name="last_name" placeholder="Last Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Register</button>
+        </form>
+        <button onclick="document.getElementById('reg-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:red; cursor:pointer;">Cancel</button>
+    </div>
+</body>
+</html>
+"""
 # --- COMMON STYLES AND RESPONSIVE GRID CONFIGURATION ---
 SHARED_CSS = """
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E"></script>
@@ -798,6 +879,8 @@ def fix_misspelled_position_header(df):
 # =====================================================================
 @app.route("/")
 def index():
+    if "user_id" not in session:
+    return redirect(url_for("login"))
     return render_template_string(LANDING_PAGE_HTML)
 
 @app.route("/system/reset-session", methods=["POST"])
