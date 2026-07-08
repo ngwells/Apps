@@ -1,11 +1,5 @@
-import datetime
-import io
-import json
-import math
-import os
-import re
-import base64
-from flask import Flask, jsonify, request, render_template_string, session
+import datetime, io, json, math, os, re, base64
+from flask import Flask, jsonify, request, render_template_string, session, redirect, url_for
 from flask_caching import Cache
 from mistralai.client import Mistral
 import numpy as np
@@ -13,33 +7,24 @@ import pandas as pd
 import requests
 from sklearn.metrics.pairwise import cosine_similarity
 from wordcloud import WordCloud, STOPWORDS
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
-# =====================================================================
-# # BACKEND FIX: Server-Side Cache Configuration                          #
-# =====================================================================
+# Cache & DB Configuration
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
 cache = Cache(app)
-
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
-)
-
-# Initialize Mistral Client securely using ONLY the system environment variable
-API_KEY = os.environ.get("MISTRAL_API_KEY")
-client = Mistral(api_key=API_KEY) if API_KEY else None
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
-from werkzeug.security import generate_password_hash, check_password_hash
-
-# Initialize Database using your specific environment variable
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_DB")
 db = SQLAlchemy(app)
+
+API_KEY = os.environ.get("MISTRAL_API_KEY")
+client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # --- User Model ---
 class User(UserMixin, db.Model):
@@ -61,30 +46,384 @@ def login():
             session["user_id"] = user.id
             return redirect(url_for("index"))
         return "Invalid credentials. <a href='/login'>Try again</a>"
-    
-    # Simple Login Page embedded
     return render_template_string(LOGIN_PAGE_HTML)
 
 @app.route("/register", methods=["POST"])
 def register():
     hashed_pw = generate_password_hash(request.form.get("password"))
-    new_user = User(
-        first_name=request.form.get("first_name"),
-        last_name=request.form.get("last_name"),
-        email=request.form.get("email"),
-        password=hashed_pw
-    )
+    new_user = User(first_name=request.form.get("first_name"), last_name=request.form.get("last_name"), email=request.form.get("email"), password=hashed_pw)
     db.session.add(new_user)
     db.session.commit()
     return redirect(url_for("login"))
 
-# Update your existing / route to check for session
+# --- Protected Routes ---
 @app.route("/")
 def index():
-    if "user_id" not in session:
+    if "user_id" not in session: 
         return redirect(url_for("login"))
     return render_template_string(LANDING_PAGE_HTML)
 
+@app.route("/system/reset-session", methods=["POST"])
+def reset_session():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    session.clear(); cache.clear()
+    return jsonify({"status": "cleared"})
+
+@app.route("/soccer-grade")
+def soccer_grade():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    raw_records = cache.get('cached_raw') or []
+    processed_records = cache.get('cached_processed') or []
+    return render_template_string(
+        SOCCER_INTERFACE_HTML,
+        has_raw=len(raw_records) > 0,
+        has_processed=len(processed_records) > 0,
+        raw_records=raw_records,
+        processed_records=processed_records,
+        raw_records_json=json.dumps(raw_records),
+        processed_records_json=json.dumps(processed_records)
+    )
+
+@app.route("/soccer-grade/sync-raw", methods=["POST"])
+def sync_raw():
+    if "user_id" not in session: return redirect(url_for("login"))
+    req_data = request.get_json()
+    if req_data and 'data' in req_data:
+        cache.set('cached_raw', req_data['data'])
+    return jsonify({"status": "synchronized"})
+
+@app.route("/soccer-grade/split-dataframe", methods=["POST"])
+def split_dataframe():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    try:
+        req_data = request.get_json()
+        if not req_data or 'data' not in req_data:
+            return jsonify({"status": "error", "message": "No data structure provided"}), 400
+        
+        raw_rows = req_data['data']
+        if not raw_rows:
+            return jsonify({"status": "success", "processed_data": []})
+        
+        df_raw = pd.DataFrame(raw_rows)
+        df_raw.columns = ['Timestamp', 'Transcript']
+        cache.set('cached_raw', df_raw.to_dict(orient='records'))
+        
+        df_processed = df_raw.copy()
+        df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
+        df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
+        
+        cache.set('cached_processed', df_exploded.to_dict(orient='records'))
+        cache.delete('processed_was_overridden')
+        
+        return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/soccer-grade/process-audio", methods=["POST"])
+def process_audio():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    if not client:
+        return jsonify({"status": "error", "message": "Mistral API client context check failed. Missing key variable configuration setup parameters."}), 500
+    
+    if 'audio_data' not in request.files:
+        return jsonify({"status": "error", "message": "No audio data received"}), 400
+    
+    audio_file = request.files['audio_data']
+    temp_filename = "temp_recording.webm"
+    audio_file.save(temp_filename)
+    
+    try:
+        with open(temp_filename, "rb") as f:
+            transcription_response = client.audio.transcriptions.complete(
+                model="voxtral-mini-latest",
+                file={"content": f.read(), "file_name": temp_filename}
+            )
+        detected_text = transcription_response.text.strip()
+    except Exception as e:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+        return jsonify({"status": "error", "message": f"Transcription structural system layer loop failure exception framework block trace: {str(e)}"}), 500
+    
+    if os.path.exists(temp_filename):
+        os.remove(temp_filename)
+    
+    if not detected_text:
+        detected_text = "[Unintelligible audio recorded]"
+    
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
+   
+
+@app.route("/upload-manager")
+def upload_manager():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    raw_session = cache.get('cached_raw') or []
+    processed_session = cache.get('cached_processed') or []
+    uploaded_session = cache.get('cached_uploaded') or []
+    was_overridden = cache.get('processed_was_overridden') or False
+    
+    raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
+    processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
+    uploaded_data_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
+    
+    return render_template_string(
+        UPLOAD_PAGE_HTML,
+        raw_data_table=raw_data_table,
+        processed_data_table=processed_data_table,
+        uploaded_data_table=uploaded_data_table,
+        was_overridden=was_overridden
+    )
+@app.route("/upload-manager/submit-file", methods=["POST"])
+def submit_uploaded_file():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    if 'uploaded_csv' not in request.files:
+        return "No file selected", 400
+    file = request.files['uploaded_csv']
+    if file.filename == '':
+        return "Empty file selection", 400
+
+@app.route("/create-lineup")
+def create_lineup():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    raw_session = cache.get('cached_raw') or []
+    processed_session = cache.get('cached_processed') or []
+    uploaded_session = cache.get('cached_uploaded') or []
+    selected_format = cache.get('selected_format') or ''
+    blueprint_table = cache.get('cached_blueprint')
+    
+    return render_template_string(
+        LINEUP_PAGE_HTML,
+        raw_count=len(raw_session),
+        processed_count=len(processed_session),
+        uploaded_count=len(uploaded_session),
+        selected_format=selected_format,
+        blueprint_table=blueprint_table
+    )
+@app.route("/create-lineup/select-format", methods=["POST"])
+def select_format_sync():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    req_body = request.get_json()
+    if req_body and 'format_type' in req_body:
+        cache.set('selected_format', req_body['format_type'])
+    return jsonify({"status": "format_cached"})
+
+@app.route("/create-lineup/clear-blueprint", methods=["POST"])
+def clear_blueprint():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    cache.delete('cached_blueprint')
+    return jsonify({"status": "success"})
+
+@app.route("/create-lineup/generate-tactics", methods=["POST"])
+def generate_tactics():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    if not client:
+        return jsonify({"status": "error", "message": "Mistral API client missing orchestration credentials."}), 500
+    
+    req_body = request.get_json()
+    format_type = req_body.get("format_type", "11v11")
+    cache.set('selected_format', format_type)
+    
+    prompt_instruction = f"""give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. Format Example: [{{"position": "Goalkeeper (GK)", "narrative_description": "Exceptional shot-stopping reflexes..."}} ]"""
+    
+    try:
+        response_stream = client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
+                {"role": "user", "content": prompt_instruction}
+            ],
+            response_format={"type": "json_object"}
+        )
+        
+        raw_content = response_stream.choices[0].message.content.strip()
+        parsed_json = json.loads(raw_content)
+        
+        if isinstance(parsed_json, dict) and len(parsed_json.keys()) == 1:
+            key = list(parsed_json.keys())[0]
+            parsed_list = parsed_json[key]
+        else:
+            parsed_list = parsed_json
+            
+        df_output = pd.DataFrame(parsed_list)
+        if len(df_output.columns) >= 2:
+            df_output.columns = ['Position', 'Narrative Description Summary']
+            
+        html_table = df_output.to_html(classes='table', index=False)
+        cache.set('cached_blueprint', html_table)
+        
+        return jsonify({"status": "success", "html_payload": html_table})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+
+
+
+
+@app.route("/analytics")
+def analytics():
+    if "user_id" not in session: return redirect(url_for("login"))
+    raw_session = cache.get('cached_raw') or []
+    processed_session = cache.get('cached_processed') or []
+    uploaded_session = cache.get('cached_uploaded') or []
+    blueprint_table = cache.get('cached_blueprint')
+    was_overridden = cache.get('processed_was_overridden') or False
+    
+    raw_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
+    processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
+    uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
+    similarity_results_table = cache.get('similarity_results_html')
+    
+    # Retrieve pre-processed chart data from cache
+    barchart_data = cache.get('barchart_data')
+    wordcloud_data = cache.get('wordcloud_data')
+    barchart_data_json = json.dumps(barchart_data) if barchart_data else None
+    
+    return render_template_string(
+        ANALYTICS_PAGE_HTML,
+        raw_table=raw_table,
+        processed_table=processed_table,
+        uploaded_table=uploaded_table,
+        blueprint_table=blueprint_table,
+        was_overridden=was_overridden,
+        similarity_results_table=similarity_results_table,
+        barchart_data_json=barchart_data_json,
+        wordcloud_data=wordcloud_data
+    )
+@app.route("/analytics/clear-metrics", methods=["POST"])
+def clear_metrics_dataframe():
+    if "user_id" not in session: return redirect(url_for("login"))
+    cache.delete('similarity_results_html')
+    cache.delete('barchart_data')
+    cache.delete('wordcloud_data')
+    return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
+
+@app.route("/analytics/compute-metrics", methods=["POST"])
+def compute_metrics():
+    if "user_id" not in session: return redirect(url_for("login"))
+    processed_session = cache.get('cached_processed') or []
+    uploaded_session = cache.get('cached_uploaded') or []
+    blueprint_html = cache.get('cached_blueprint')
+    
+    if not processed_session:
+        return "Error: Processed Player Evaluations dataset frame missing.", 400
+        
+    if not uploaded_session and not blueprint_html:
+        return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
+        
+    player_evals_df = pd.DataFrame(processed_session)
+    
+    if 'Player' not in player_evals_df.columns:
+        player_evals_df['Player'] = player_evals_df['Transcript'].apply(
+            lambda x: re.search(r'(player\s+\d+|\d+)', str(x), re.I).group(1) if re.search(r'(player\s+\d+|\d+)', str(x), re.I) else "Unknown"
+        )
+    if 'Description' not in player_evals_df.columns:
+        player_evals_df['Description'] = player_evals_df['Transcript']
+        
+    if uploaded_session:
+        ideal_player_df = pd.DataFrame(uploaded_session)
+    else:
+        try:
+            ideal_player_df = pd.read_html(blueprint_html)[0]
+        except Exception:
+            return "Error parsing system blueprint data frames.", 500
+            
+    ideal_player_df = fix_misspelled_position_header(ideal_player_df)
+    
+    if 'Position' not in ideal_player_df.columns:
+        if len(ideal_player_df.columns) >= 1:
+            ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
+    if 'Description' not in ideal_player_df.columns:
+        if len(ideal_player_df.columns) >= 2:
+            ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
+            
+    try:
+        player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
+        ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
+        
+        similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
+        similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
+        
+        top_players_per_position = {}
+        for position in similarity_df.columns:
+            top_players = similarity_df[position].sort_values(ascending=False).head(3)
+            top_players_per_position[position] = top_players
+            
+        results = []
+        for position, players in top_players_per_position.items():
+            for player, score in players.items():
+                results.append({
+                    "Position": position,
+                    "Confidence Score": round(float(score), 4),
+                    "Player": player
+                })
+                
+        results_df = pd.DataFrame(results)
+        results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
+        results_df = results_df[["Position", "Confidence Score", "Player"]]
+        cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
+        
+        # =======================================================
+        # Generate JSON Data for Frontend Chart.js Bar Charts
+        # (Replaces buggy Matplotlib logic entirely)
+        # =======================================================
+        barchart_data = []
+        for position, pos_data in top_players_per_position.items():
+            barchart_data.append({
+                "position": position,
+                "players": list(pos_data.index),
+                "scores": [round(float(v), 3) for v in pos_data.values]
+            })
+        cache.set('barchart_data', barchart_data)
+        
+        # =======================================================
+        # Generate Native WordCloud Images (No Matplotlib Grid)
+        # =======================================================
+        player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
+        stopwords = set(STOPWORDS)
+        wordcloud_data = []
+        
+        for player, raw_text in player_text.items():
+            clean_tokens = " ".join(re.findall(r'\b\w{4,}\b', raw_text.lower()))
+            if not clean_tokens.strip():
+                continue
+                
+            wc = WordCloud(
+                width=300,
+                height=200,
+                max_words=25,
+                background_color='white',
+                stopwords=stopwords,
+                min_font_size=8,
+                prefer_horizontal=0.8
+            ).generate(clean_tokens)
+            
+            # Use native WordCloud to_image() method to bypass matplotlib
+            img = wc.to_image()
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+            
+            wordcloud_data.append({
+                "player": player,
+                "img": b64
+            })
+            
+        cache.set('wordcloud_data', wordcloud_data)
+        
+        return render_template_string("<h3>Matrix Calculations Completed!</h3><script>window.location.href='/analytics';</script>")
+        
+    except Exception as e:
+        return f"Execution matrix construction failure: {str(e)}", 500
 
 
 # =====================================================================
@@ -815,6 +1154,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
 </div> 
 </body> 
 </html>"""
+# --- PASTE ALL YOUR UTILITY FUNCTIONS (split_comments_smart, etc.) HERE ---
 
 # =====================================================================
 # # SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                       #
@@ -874,374 +1214,6 @@ def fix_misspelled_position_header(df):
     return df
 
 
-# =====================================================================
-# # SECTION 3: APPS CONTROLLER ENGINE & ROUTING                           #
-# =====================================================================
-@app.route("/")
-def index():
-    if "user_id" not in session:
-    return redirect(url_for("login"))
-    return render_template_string(LANDING_PAGE_HTML)
-
-@app.route("/system/reset-session", methods=["POST"])
-def reset_session():
-    session.clear()
-    cache.clear()
-    return jsonify({"status": "cleared"})
-
-@app.route("/soccer-grade")
-def soccer_grade():
-    raw_records = cache.get('cached_raw') or []
-    processed_records = cache.get('cached_processed') or []
-    return render_template_string(
-        SOCCER_INTERFACE_HTML,
-        has_raw=len(raw_records) > 0,
-        has_processed=len(processed_records) > 0,
-        raw_records=raw_records,
-        processed_records=processed_records,
-        raw_records_json=json.dumps(raw_records),
-        processed_records_json=json.dumps(processed_records)
-    )
-
-@app.route("/soccer-grade/sync-raw", methods=["POST"])
-def sync_raw():
-    req_data = request.get_json()
-    if req_data and 'data' in req_data:
-        cache.set('cached_raw', req_data['data'])
-    return jsonify({"status": "synchronized"})
-
-@app.route("/soccer-grade/split-dataframe", methods=["POST"])
-def split_dataframe():
-    try:
-        req_data = request.get_json()
-        if not req_data or 'data' not in req_data:
-            return jsonify({"status": "error", "message": "No data structure provided"}), 400
-        
-        raw_rows = req_data['data']
-        if not raw_rows:
-            return jsonify({"status": "success", "processed_data": []})
-        
-        df_raw = pd.DataFrame(raw_rows)
-        df_raw.columns = ['Timestamp', 'Transcript']
-        cache.set('cached_raw', df_raw.to_dict(orient='records'))
-        
-        df_processed = df_raw.copy()
-        df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
-        df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
-        
-        cache.set('cached_processed', df_exploded.to_dict(orient='records'))
-        cache.delete('processed_was_overridden')
-        
-        return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/soccer-grade/process-audio", methods=["POST"])
-def process_audio():
-    if not client:
-        return jsonify({"status": "error", "message": "Mistral API client context check failed. Missing key variable configuration setup parameters."}), 500
-    
-    if 'audio_data' not in request.files:
-        return jsonify({"status": "error", "message": "No audio data received"}), 400
-    
-    audio_file = request.files['audio_data']
-    temp_filename = "temp_recording.webm"
-    audio_file.save(temp_filename)
-    
-    try:
-        with open(temp_filename, "rb") as f:
-            transcription_response = client.audio.transcriptions.complete(
-                model="voxtral-mini-latest",
-                file={"content": f.read(), "file_name": temp_filename}
-            )
-        detected_text = transcription_response.text.strip()
-    except Exception as e:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-        return jsonify({"status": "error", "message": f"Transcription structural system layer loop failure exception framework block trace: {str(e)}"}), 500
-    
-    if os.path.exists(temp_filename):
-        os.remove(temp_filename)
-    
-    if not detected_text:
-        detected_text = "[Unintelligible audio recorded]"
-    
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
-
-@app.route("/upload-manager")
-def upload_manager():
-    raw_session = cache.get('cached_raw') or []
-    processed_session = cache.get('cached_processed') or []
-    uploaded_session = cache.get('cached_uploaded') or []
-    was_overridden = cache.get('processed_was_overridden') or False
-    
-    raw_data_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
-    processed_data_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
-    uploaded_data_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
-    
-    return render_template_string(
-        UPLOAD_PAGE_HTML,
-        raw_data_table=raw_data_table,
-        processed_data_table=processed_data_table,
-        uploaded_data_table=uploaded_data_table,
-        was_overridden=was_overridden
-    )
-
-@app.route("/upload-manager/submit-file", methods=["POST"])
-def submit_uploaded_file():
-    if 'uploaded_csv' not in request.files:
-        return "No file selected", 400
-    file = request.files['uploaded_csv']
-    if file.filename == '':
-        return "Empty file selection", 400
-    
-    try:
-        uploaded_df = pd.read_csv(file)
-        cache.set('cached_uploaded', uploaded_df.to_dict(orient='records'))
-        return render_template_string("<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
-    except Exception as e:
-        return f"Error analyzing data structure: {str(e)}", 500
-
-@app.route("/upload-manager/override-processed", methods=["POST"])
-def override_processed_data():
-    if 'mock_processed_csv' not in request.files:
-        return "No file selected for testing override", 400
-    file = request.files['mock_processed_csv']
-    if file.filename == '':
-        return "Empty file selection", 400
-    
-    try:
-        mock_df = pd.read_csv(file)
-        cache.set('cached_processed', mock_df.to_dict(orient='records'))
-        cache.set('processed_was_overridden', True)
-        return render_template_string("<h3>Testing Override Applied!</h3><p>Exploded dataset frame temporarily swapped.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
-    except Exception as e:
-        return f"Error applying template mock override: {str(e)}", 500
-
-@app.route("/create-lineup")
-def create_lineup():
-    raw_session = cache.get('cached_raw') or []
-    processed_session = cache.get('cached_processed') or []
-    uploaded_session = cache.get('cached_uploaded') or []
-    selected_format = cache.get('selected_format') or ''
-    blueprint_table = cache.get('cached_blueprint')
-    
-    return render_template_string(
-        LINEUP_PAGE_HTML,
-        raw_count=len(raw_session),
-        processed_count=len(processed_session),
-        uploaded_count=len(uploaded_session),
-        selected_format=selected_format,
-        blueprint_table=blueprint_table
-    )
-
-@app.route("/create-lineup/select-format", methods=["POST"])
-def select_format_sync():
-    req_body = request.get_json()
-    if req_body and 'format_type' in req_body:
-        cache.set('selected_format', req_body['format_type'])
-    return jsonify({"status": "format_cached"})
-
-@app.route("/create-lineup/clear-blueprint", methods=["POST"])
-def clear_blueprint():
-    cache.delete('cached_blueprint')
-    return jsonify({"status": "success"})
-
-@app.route("/create-lineup/generate-tactics", methods=["POST"])
-def generate_tactics():
-    if not client:
-        return jsonify({"status": "error", "message": "Mistral API client missing orchestration credentials."}), 500
-    
-    req_body = request.get_json()
-    format_type = req_body.get("format_type", "11v11")
-    cache.set('selected_format', format_type)
-    
-    prompt_instruction = f"""give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. Format Example: [{{"position": "Goalkeeper (GK)", "narrative_description": "Exceptional shot-stopping reflexes..."}} ]"""
-    
-    try:
-        response_stream = client.chat.complete(
-            model="mistral-large-latest",
-            messages=[
-                {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
-                {"role": "user", "content": prompt_instruction}
-            ],
-            response_format={"type": "json_object"}
-        )
-        
-        raw_content = response_stream.choices[0].message.content.strip()
-        parsed_json = json.loads(raw_content)
-        
-        if isinstance(parsed_json, dict) and len(parsed_json.keys()) == 1:
-            key = list(parsed_json.keys())[0]
-            parsed_list = parsed_json[key]
-        else:
-            parsed_list = parsed_json
-            
-        df_output = pd.DataFrame(parsed_list)
-        if len(df_output.columns) >= 2:
-            df_output.columns = ['Position', 'Narrative Description Summary']
-            
-        html_table = df_output.to_html(classes='table', index=False)
-        cache.set('cached_blueprint', html_table)
-        
-        return jsonify({"status": "success", "html_payload": html_table})
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
-
-@app.route("/analytics")
-def analytics():
-    raw_session = cache.get('cached_raw') or []
-    processed_session = cache.get('cached_processed') or []
-    uploaded_session = cache.get('cached_uploaded') or []
-    blueprint_table = cache.get('cached_blueprint')
-    was_overridden = cache.get('processed_was_overridden') or False
-    
-    raw_table = pd.DataFrame(raw_session).to_html(classes='table', index=False) if raw_session else None
-    processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
-    uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
-    similarity_results_table = cache.get('similarity_results_html')
-    
-    # Retrieve pre-processed chart data from cache
-    barchart_data = cache.get('barchart_data')
-    wordcloud_data = cache.get('wordcloud_data')
-    barchart_data_json = json.dumps(barchart_data) if barchart_data else None
-    
-    return render_template_string(
-        ANALYTICS_PAGE_HTML,
-        raw_table=raw_table,
-        processed_table=processed_table,
-        uploaded_table=uploaded_table,
-        blueprint_table=blueprint_table,
-        was_overridden=was_overridden,
-        similarity_results_table=similarity_results_table,
-        barchart_data_json=barchart_data_json,
-        wordcloud_data=wordcloud_data
-    )
-
-@app.route("/analytics/clear-metrics", methods=["POST"])
-def clear_metrics_dataframe():
-    cache.delete('similarity_results_html')
-    cache.delete('barchart_data')
-    cache.delete('wordcloud_data')
-    return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
-
-@app.route("/analytics/compute-metrics", methods=["POST"])
-def compute_metrics():
-    processed_session = cache.get('cached_processed') or []
-    uploaded_session = cache.get('cached_uploaded') or []
-    blueprint_html = cache.get('cached_blueprint')
-    
-    if not processed_session:
-        return "Error: Processed Player Evaluations dataset frame missing.", 400
-        
-    if not uploaded_session and not blueprint_html:
-        return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
-        
-    player_evals_df = pd.DataFrame(processed_session)
-    
-    if 'Player' not in player_evals_df.columns:
-        player_evals_df['Player'] = player_evals_df['Transcript'].apply(
-            lambda x: re.search(r'(player\s+\d+|\d+)', str(x), re.I).group(1) if re.search(r'(player\s+\d+|\d+)', str(x), re.I) else "Unknown"
-        )
-    if 'Description' not in player_evals_df.columns:
-        player_evals_df['Description'] = player_evals_df['Transcript']
-        
-    if uploaded_session:
-        ideal_player_df = pd.DataFrame(uploaded_session)
-    else:
-        try:
-            ideal_player_df = pd.read_html(blueprint_html)[0]
-        except Exception:
-            return "Error parsing system blueprint data frames.", 500
-            
-    ideal_player_df = fix_misspelled_position_header(ideal_player_df)
-    
-    if 'Position' not in ideal_player_df.columns:
-        if len(ideal_player_df.columns) >= 1:
-            ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
-    if 'Description' not in ideal_player_df.columns:
-        if len(ideal_player_df.columns) >= 2:
-            ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
-            
-    try:
-        player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
-        ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
-        
-        similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
-        similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
-        
-        top_players_per_position = {}
-        for position in similarity_df.columns:
-            top_players = similarity_df[position].sort_values(ascending=False).head(3)
-            top_players_per_position[position] = top_players
-            
-        results = []
-        for position, players in top_players_per_position.items():
-            for player, score in players.items():
-                results.append({
-                    "Position": position,
-                    "Confidence Score": round(float(score), 4),
-                    "Player": player
-                })
-                
-        results_df = pd.DataFrame(results)
-        results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
-        results_df = results_df[["Position", "Confidence Score", "Player"]]
-        cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
-        
-        # =======================================================
-        # Generate JSON Data for Frontend Chart.js Bar Charts
-        # (Replaces buggy Matplotlib logic entirely)
-        # =======================================================
-        barchart_data = []
-        for position, pos_data in top_players_per_position.items():
-            barchart_data.append({
-                "position": position,
-                "players": list(pos_data.index),
-                "scores": [round(float(v), 3) for v in pos_data.values]
-            })
-        cache.set('barchart_data', barchart_data)
-        
-        # =======================================================
-        # Generate Native WordCloud Images (No Matplotlib Grid)
-        # =======================================================
-        player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
-        stopwords = set(STOPWORDS)
-        wordcloud_data = []
-        
-        for player, raw_text in player_text.items():
-            clean_tokens = " ".join(re.findall(r'\b\w{4,}\b', raw_text.lower()))
-            if not clean_tokens.strip():
-                continue
-                
-            wc = WordCloud(
-                width=300,
-                height=200,
-                max_words=25,
-                background_color='white',
-                stopwords=stopwords,
-                min_font_size=8,
-                prefer_horizontal=0.8
-            ).generate(clean_tokens)
-            
-            # Use native WordCloud to_image() method to bypass matplotlib
-            img = wc.to_image()
-            buf = io.BytesIO()
-            img.save(buf, format='PNG')
-            b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-            
-            wordcloud_data.append({
-                "player": player,
-                "img": b64
-            })
-            
-        cache.set('wordcloud_data', wordcloud_data)
-        
-        return render_template_string("<h3>Matrix Calculations Completed!</h3><script>window.location.href='/analytics';</script>")
-        
-    except Exception as e:
-        return f"Execution matrix construction failure: {str(e)}", 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
