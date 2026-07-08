@@ -20,7 +20,11 @@ app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
 cache = Cache(app)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_DB")
+db_url = os.environ.get("DATABASE_URL")
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 db = SQLAlchemy(app)
 
 API_KEY = os.environ.get("MISTRAL_API_KEY")
