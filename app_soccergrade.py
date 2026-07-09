@@ -185,13 +185,36 @@ def upload_manager():
     )
 @app.route("/upload-manager/submit-file", methods=["POST"])
 def submit_uploaded_file():
-    if "user_id" not in session: 
-        return redirect(url_for("login"))
+    if "user_id" not in session: return redirect(url_for("login"))
     if 'uploaded_csv' not in request.files:
         return "No file selected", 400
     file = request.files['uploaded_csv']
     if file.filename == '':
         return "Empty file selection", 400
+    
+    try:
+        uploaded_df = pd.read_csv(file)
+        cache.set('cached_uploaded', uploaded_df.to_dict(orient='records'))
+        return render_template_string("<h3>Ingestion complete!</h3><p>File parsed successfully.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
+    except Exception as e:
+        return f"Error analyzing data structure: {str(e)}", 500
+
+@app.route("/upload-manager/override-processed", methods=["POST"])
+def override_processed_data():
+    if "user_id" not in session: return redirect(url_for("login"))
+    if 'mock_processed_csv' not in request.files:
+        return "No file selected for testing override", 400
+    file = request.files['mock_processed_csv']
+    if file.filename == '':
+        return "Empty file selection", 400
+    
+    try:
+        mock_df = pd.read_csv(file)
+        cache.set('cached_processed', mock_df.to_dict(orient='records'))
+        cache.set('processed_was_overridden', True)
+        return render_template_string("<h3>Testing Override Applied!</h3><p>Exploded dataset frame temporarily swapped.</p><script>setTimeout(function(){window.location.href='/upload-manager';}, 1200);</script>")
+    except Exception as e:
+        return f"Error applying template mock override: {str(e)}", 500
 
 @app.route("/create-lineup")
 def create_lineup():
