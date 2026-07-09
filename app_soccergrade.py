@@ -349,12 +349,33 @@ def compute_metrics():
         
     player_evals_df = pd.DataFrame(processed_session)
     
-    if 'Player' not in player_evals_df.columns:
-        player_evals_df['Player'] = player_evals_df['Transcript'].apply(
+    # ==========================================
+    # NEW FIX: Resilient Column Mapping
+    # ==========================================
+    player_evals_df.columns = [str(c).strip() for c in player_evals_df.columns]
+    
+    # 1. Safely handle the 'Player' column
+    player_col = next((c for c in player_evals_df.columns if c.lower() == 'player'), None)
+    if player_col:
+        player_evals_df.rename(columns={player_col: 'Player'}, inplace=True)
+    else:
+        # Fallback: Extract from the best available text column
+        target_col = 'Transcript' if 'Transcript' in player_evals_df.columns else (
+            'Description' if 'Description' in player_evals_df.columns else player_evals_df.columns[-1]
+        )
+        player_evals_df['Player'] = player_evals_df[target_col].apply(
             lambda x: re.search(r'(player\s+\d+|\d+)', str(x), re.I).group(1) if re.search(r'(player\s+\d+|\d+)', str(x), re.I) else "Unknown"
         )
-    if 'Description' not in player_evals_df.columns:
+        
+    # 2. Safely handle the 'Description' column for embeddings
+    desc_col = next((c for c in player_evals_df.columns if c.lower() == 'description'), None)
+    if desc_col:
+        player_evals_df.rename(columns={desc_col: 'Description'}, inplace=True)
+    elif 'Transcript' in player_evals_df.columns:
         player_evals_df['Description'] = player_evals_df['Transcript']
+    else:
+        player_evals_df['Description'] = player_evals_df[player_evals_df.columns[-1]]
+    # ==========================================
         
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
@@ -401,7 +422,6 @@ def compute_metrics():
         
         # =======================================================
         # Generate JSON Data for Frontend Chart.js Bar Charts
-        # (Replaces buggy Matplotlib logic entirely)
         # =======================================================
         barchart_data = []
         for position, pos_data in top_players_per_position.items():
