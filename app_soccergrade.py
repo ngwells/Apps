@@ -388,8 +388,12 @@ def compute_metrics():
     ideal_player_df = fix_misspelled_position_header(ideal_player_df)
     
     if 'Position' not in ideal_player_df.columns:
-        if len(ideal_player_df.columns) >= 1:
+        # Strip whitespace from all column names first
+        ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
+        if 'Position' not in ideal_player_df.columns:
+            print(f"Warning: Forcing rename of column '{ideal_player_df.columns[0]}' to 'Position'")
             ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
+    
     if 'Description' not in ideal_player_df.columns:
         if len(ideal_player_df.columns) >= 2:
             ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
