@@ -42,23 +42,60 @@ with app.app_context():
     db.create_all()
 
 # --- Auth Routes ---
+import re # Make sure this is at the top of your file with the other imports if not already there
+
+def is_valid_email(email):
+    """Basic regex to check if the string looks like an email address."""
+    return re.match(r"[^@]+@[^@]+\.[^@]+", email)
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        user = User.query.filter_by(email=request.form.get("email")).first()
+        email = request.form.get("email")
+        if not is_valid_email(email):
+            return "Please enter a valid email address. <a href='/login'>Try again</a>", 400
+            
+        user = User.query.filter_by(email=email).first()
         if user and check_password_hash(user.password, request.form.get("password")):
             session["user_id"] = user.id
             return redirect(url_for("index"))
+            
         return "Invalid credentials. <a href='/login'>Try again</a>"
     return render_template_string(LOGIN_PAGE_HTML)
 
 @app.route("/register", methods=["POST"])
 def register():
+    email = request.form.get("email")
+    if not is_valid_email(email):
+         return "Invalid email format. Please go back and try again.", 400
+         
+    # Optional: Check if email already exists to prevent duplicate errors
+    if User.query.filter_by(email=email).first():
+         return "Email already registered. <a href='/login'>Go to login</a>", 400
+
     hashed_pw = generate_password_hash(request.form.get("password"))
-    new_user = User(first_name=request.form.get("first_name"), last_name=request.form.get("last_name"), email=request.form.get("email"), password=hashed_pw)
+    new_user = User(
+        first_name=request.form.get("first_name"),
+        last_name=request.form.get("last_name"),
+        email=email,
+        password=hashed_pw
+    )
     db.session.add(new_user)
     db.session.commit()
     return redirect(url_for("login"))
+
+@app.route("/reset-account", methods=["POST"])
+def reset_account():
+    """Deletes the user account so they can re-register with a new password."""
+    email = request.form.get("email")
+    user = User.query.filter_by(email=email).first()
+    
+    if user:
+        db.session.delete(user)
+        db.session.commit()
+        return "Account deleted! You can now <a href='/login'>register again</a> with a new password."
+    else:
+        return "Email not found. <a href='/login'>Try again</a>", 404
 
 # --- Protected Routes ---
 @app.route("/")
