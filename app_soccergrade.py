@@ -84,16 +84,26 @@ def register():
     db.session.commit()
     return redirect(url_for("login"))
 
-@app.route("/reset-account", methods=["POST"])
-def reset_account():
-    """Deletes the user account so they can re-register with a new password."""
+@app.route("/reset-password", methods=["POST"])
+def reset_password():
+    """Updates the user's password without deleting their account."""
     email = request.form.get("email")
+    new_password = request.form.get("new_password")
+    
+    # Optional: Basic validation
+    if not email or not new_password:
+        return "Email and new password are required. <a href='/login'>Try again</a>", 400
+        
     user = User.query.filter_by(email=email).first()
     
     if user:
-        db.session.delete(user)
+        # Generate a new hash for the new password and update the user record
+        hashed_pw = generate_password_hash(new_password)
+        user.password = hashed_pw
+        
+        # Commit the changes to the database
         db.session.commit()
-        return "Account deleted! You can now <a href='/login'>register again</a> with a new password."
+        return "Password updated successfully! You can now <a href='/login'>log in</a>."
     else:
         return "Email not found. <a href='/login'>Try again</a>", 404
 
@@ -550,11 +560,12 @@ LOGIN_PAGE_HTML = """
     </div>
 
     <div id="reset-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
-        <h3 style="color: #dc3545;">Reset Account</h3>
-        <p style="font-size: 12px; color: #666;">Forgot your password? Enter your email to delete your current account so you can re-register.</p>
-        <form action="/reset-account" method="POST">
+        <h3 style="color: #007bff;">Reset Password</h3>
+        <p style="font-size: 12px; color: #666;">Enter your email and a new password to update your account.</p>
+        <form action="/reset-password" method="POST">
             <input type="email" name="email" placeholder="Enter your Email" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <button type="submit" style="width: 100%; padding: 10px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Delete & Reset</button>
+            <input type="password" name="new_password" placeholder="New Password" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <button type="submit" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Update Password</button>
         </form>
         <button onclick="document.getElementById('reset-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:black; cursor:pointer;">Cancel</button>
     </div>
