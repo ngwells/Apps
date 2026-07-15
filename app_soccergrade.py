@@ -486,6 +486,7 @@ LOGIN_PAGE_HTML = """
 <html>
 <head><title>Soccer Grader Login</title></head>
 <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
+    
     <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 300px; text-align: center;">
         <h2>Soccer Grader Login</h2>
         <form action="/login" method="POST">
@@ -493,7 +494,10 @@ LOGIN_PAGE_HTML = """
             <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
             <button type="submit" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Log In</button>
         </form>
-        <p>Don't have an account? <a href="#" onclick="document.getElementById('reg-modal').style.display='block'">Create Account</a></p>
+        <p style="font-size: 13px; margin-top: 15px;">
+            <a href="#" onclick="document.getElementById('reset-modal').style.display='block'" style="color: #dc3545; text-decoration: none;">Forgot Password? (Reset Account)</a>
+        </p>
+        <p style="font-size: 14px;">Don't have an account? <a href="#" onclick="document.getElementById('reg-modal').style.display='block'">Create Account</a></p>
     </div>
 
     <div id="reg-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
@@ -501,12 +505,23 @@ LOGIN_PAGE_HTML = """
         <form action="/register" method="POST">
             <input type="text" name="first_name" placeholder="First Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
             <input type="text" name="last_name" placeholder="Last Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <input type="email" name="email" placeholder="Email Address" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
             <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
             <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Register</button>
         </form>
         <button onclick="document.getElementById('reg-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:red; cursor:pointer;">Cancel</button>
     </div>
+
+    <div id="reset-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
+        <h3 style="color: #dc3545;">Reset Account</h3>
+        <p style="font-size: 12px; color: #666;">Forgot your password? Enter your email to delete your current account so you can re-register.</p>
+        <form action="/reset-account" method="POST">
+            <input type="email" name="email" placeholder="Enter your Email" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <button type="submit" style="width: 100%; padding: 10px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Delete & Reset</button>
+        </form>
+        <button onclick="document.getElementById('reset-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:black; cursor:pointer;">Cancel</button>
+    </div>
+
 </body>
 </html>
 """
