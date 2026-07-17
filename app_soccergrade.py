@@ -985,9 +985,10 @@ UPLOAD_PAGE_HTML = """<!DOCTYPE html>
     <div class="upload-flex-grid"> 
         <div class="upload-zone"> 
             <form action="/upload-manager/submit-file" method="POST" enctype="multipart/form-data"> 
-                <label style="font-weight:bold; display:block; color:#0d47a1;">Upload Spreadsheet Metrics</label> 
+                <label style="font-weight:bold; display:block; color:#0d47a1;">Ideal Skills and Traits</label>
+                <span style="font-size: 11px; color: #7f8c8d; display:block;">Create positions and what type of player should fill them</span> 
                 <input type="file" name="uploaded_csv" accept=".csv" required> 
-                <button type="submit" style="background: var(--success-color); color:white;">Ingest Standard File</button> 
+                <button type="submit" style="background: var(--success-color); color:white;">Upload Position Descriptions</button> 
             </form> 
         </div> 
         <div class="upload-zone override"> 
