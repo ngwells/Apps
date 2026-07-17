@@ -955,7 +955,7 @@ UPLOAD_PAGE_HTML = """<!DOCTYPE html>
     <h2>Data Upload Manager</h2> 
     <p style="color:#666;">Manage your imported spreadsheet files separately alongside your captured active voice logs.</p> 
     
-    <h3 style="color: #0d47a1;">Active Uploaded Spreadsheet Data</h3> 
+    <h3 style="color: #0d47a1;">Active Uploaded Positions Spreadsheet Data</h3> 
     <div class="upload-block table-wrap"> 
         {% if uploaded_data_table %} 
             {{ uploaded_data_table|safe }} 
