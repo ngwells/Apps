@@ -20,9 +20,22 @@ app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
 cache = Cache(app)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
+# db_url = os.environ.get("DATABASE_URL")
+# if db_url and db_url.startswith("postgres://"):
+#     db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+# app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+# db = SQLAlchemy(app)
 db_url = os.environ.get("DATABASE_URL")
-if db_url and db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+if db_url:
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    # Ensure SSL mode is requested for cloud databases like Supabase
+    if "sslmode" not in db_url:
+        separator = "&" if "?" in db_url else "?"
+        db_url = f"{db_url}{separator}sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 db = SQLAlchemy(app)
