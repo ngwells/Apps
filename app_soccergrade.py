@@ -326,7 +326,7 @@ def generate_tactics():
     
     try:
         response_stream = client.chat.complete(
-            model="mistral-large-latest",
+            model="mistral-small-latest",
             messages=[
                 {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
                 {"role": "user", "content": prompt_instruction}
