@@ -45,7 +45,8 @@ client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # --- User Model ---
 class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
+    __tablename__ = 'user'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     first_name = db.Column(db.String(50))
     last_name = db.Column(db.String(50))
     email = db.Column(db.String(120), unique=True, nullable=False)
