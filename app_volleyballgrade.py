@@ -10,6 +10,9 @@ from wordcloud import WordCloud, STOPWORDS
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
+from pydantic import BaseModel, Field
+from google import genai
+from google.genai import types
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
