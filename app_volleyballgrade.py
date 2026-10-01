@@ -241,16 +241,21 @@ def split_dataframe():
             processed_dfs.append(df_parsed)
             
         if processed_dfs:
-            df_final = pd.concat(processed_dfs, ignore_index=True)
+            df_new = pd.concat(processed_dfs, ignore_index=True)
         else:
-            df_final = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
+            df_new = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
 
-        processed_records = df_final.to_dict(orient="records")
-        cache.set('cached_processed', processed_records)
+        new_records = df_new.to_dict(orient="records")
+        
+        # Retrieve existing cached processed records and append the new ones
+        existing_processed = cache.get('cached_processed') or []
+        updated_processed = existing_processed + new_records
+        
+        cache.set('cached_processed', updated_processed)
         
         return jsonify({
             "status": "success",
-            "processed_records": processed_records
+            "processed_records": new_records # Returns only the newly processed batch to append on frontend
         })
 
     except Exception as e:
@@ -258,7 +263,7 @@ def split_dataframe():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/soccer-grade/process-audio", methods=["POST"])
+
 @app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
     if "user_id" not in session: 
@@ -886,21 +891,36 @@ function appendToSessionDOM(timestamp, transcript) {
     fetch('/soccer-grade/sync-raw', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: sessionRecords }) }); 
 } 
 
+let lastProcessedIndex = 0; // Track how many raw rows have been processed
+
 processBtn.addEventListener('click', async () => {
     if (sessionRecords.length === 0) return; 
-    statusDiv.innerText = "Status: Split-processing transcripts..."; 
+    
+    // Get only the raw rows that haven't been processed yet
+    const newRawRows = sessionRecords.slice(lastProcessedIndex);
+    if (newRawRows.length === 0) {
+        statusDiv.style.color = 'orange';
+        statusDiv.innerText = "Status: No new raw rows to process!";
+        return;
+    }
+
+    statusDiv.innerText = `Status: Processing ${newRawRows.length} new transcript(s)...`; 
+    
     try {
         const response = await fetch('/soccer-grade/split-dataframe', {
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ raw_rows: sessionRecords.map(r => [r.Timestamp, r.Transcript]) }) 
+            body: JSON.stringify({ raw_rows: newRawRows.map(r => [r.Timestamp, r.Transcript]) }) 
         }); 
         const result = await response.json(); 
+        
         if (result.status === 'success') {
-            processedRecords = result.processed_records; 
-            processedList.innerHTML = ''; 
+            // Append newly processed records to your existing processedRecords array
+            const newlyProcessed = result.processed_records || [];
+            processedRecords = processedRecords.concat(newlyProcessed);
             
-            processedRecords.forEach(row => {
+            // Render the new rows into the UI list
+            newlyProcessed.forEach(row => {
                 const li = document.createElement('li'); 
                 li.className = 'history-item'; 
                 li.innerHTML = `
@@ -911,9 +931,12 @@ processBtn.addEventListener('click', async () => {
                 processedList.appendChild(li); 
             }); 
             
+            // Update index so we don't re-process these rows next time
+            lastProcessedIndex = sessionRecords.length;
+            
             exportProcessedBtn.disabled = false; 
             statusDiv.style.color = 'green'; 
-            statusDiv.innerText = "Status: Split processing finished and cached!";        
+            statusDiv.innerText = "Status: New rows processed and appended!";        
         } else {
             statusDiv.style.color = 'red'; 
             statusDiv.innerText = "Error: " + (result.message || "Unknown error");
@@ -922,7 +945,7 @@ processBtn.addEventListener('click', async () => {
         statusDiv.style.color = 'red'; 
         statusDiv.innerText = "Server error during row processing."; 
     } 
-}); 
+});
 
 async function downloadCSV(records, filename, isProcessed = false) {
     if (!records || records.length === 0) return;
