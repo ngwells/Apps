@@ -947,15 +947,24 @@ processBtn.addEventListener('click', async () => {
         if (result.status === 'success') {
             processedRecords = result.processed_data; 
             processedList.innerHTML = ''; 
+            
             processedRecords.forEach(row => {
                 const li = document.createElement('li'); 
                 li.className = 'history-item'; 
-                li.innerHTML = `<span class="timestamp">[${row.Timestamp}]</span> ${row.Transcript}`; 
+                
+                // Updated template to include the Score badge/span
+                li.innerHTML = `
+                    <span class="timestamp">[${row.Timestamp}]</span> 
+                    <span class="transcript-text">${row.Transcript}</span> 
+                    <span class="score-badge">Score: ${row.Score}</span>
+                `; 
+                
                 processedList.appendChild(li); 
             }); 
+            
             exportProcessedBtn.disabled = false; 
             statusDiv.style.color = 'green'; 
-            statusDiv.innerText = "Status: Split processing finished and cached!"; 
+            statusDiv.innerText = "Status: Split processing finished and cached!";        
         } 
     } catch (err) {
         statusDiv.style.color = 'red'; 
