@@ -256,6 +256,7 @@ def split_dataframe():
 
 
 @app.route("/soccer-grade/process-audio", methods=["POST"])
+@app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
     if "user_id" not in session: 
         return redirect(url_for("login"))
@@ -286,6 +287,37 @@ def process_audio():
     
     if not detected_text:
         detected_text = "[Unintelligible audio recorded]"
+    else:
+        # --- ROBUST NUMBER NORMALIZATION FOR 0-99 ---
+        ones = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 
+            'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 
+            'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 
+            'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 
+            'eighteen': 18, 'nineteen': 19
+        }
+        tens = {
+            'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 
+            'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90
+        }
+
+        # Replace compound numbers (e.g., "fifty-four" or "fifty four")
+        def replace_compound(match):
+            t_word, o_word = match.groups()
+            val = tens.get(t_word.lower(), 0) + ones.get(o_word.lower(), 0)
+            return str(val)
+
+        # Match hyphenated or spaced tens + ones (e.g. "fifty-four", "fifty four")
+        compound_pattern = r'\b(' + '|'.join(tens.keys()) + r')[\s-](' + '|'.join(ones.keys()) + r')\b'
+        detected_text = re.sub(compound_pattern, replace_compound, detected_text, flags=re.IGNORECASE)
+
+        # Replace individual tens words (e.g., "fifty")
+        for word, val in tens.items():
+            detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
+
+        # Replace individual ones words (e.g., "three")
+        for word, val in ones.items():
+            detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
     
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
