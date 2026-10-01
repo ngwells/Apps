@@ -43,6 +43,10 @@ db = SQLAlchemy(app)
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
 
+API_KEY2 = os.environ.get("GEMINI_API_KEY")
+client2 = genai.Client(api_key=API_KEY2) if API_KEY2 else None
+
+
 # --- User Model ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -158,32 +162,112 @@ def sync_raw():
         cache.set('cached_raw', req_data['data'])
     return jsonify({"status": "synchronized"})
 
+class TranscriptSegment(BaseModel):
+    text: str = Field(description="The separate raw text segment from the transcript.")
+    score: int = Field(description="Score from 100 to 0 rating how closely the text evaluates a single specific player's trait or characteristic. 100 = direct evaluation of one player. Lower scores (closer to 0) = general instructions, weird text, or event sequences involving multiple players.")
+
+class TranscriptLog(BaseModel):
+    segments: list[TranscriptSegment] = Field(description="List of segmented text chunks extracted from the transcript with their evaluation scores.")
+
+
+def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
+    prompt = f"""
+    Analyze the following transcript text, break it down into natural segments/sentences, and for each segment:
+    1. Extract the raw segment text.
+    2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
+       - Score 100: Directly evaluates an individual player (e.g., "Player 17 doing great").
+       - Lower scores / 0: General instructions ("redo the drill"), noise, or sequences of events involving multiple players (e.g., "Player 17 passed to Player 18 and was stopped by Player 20").
+       
+    Transcript: "{text}"
+    """
+    
+    try:
+        response = client2.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TranscriptLog,
+                temperature=0.1,
+            ),
+        )
+        
+        result = response.parsed
+        
+        rows = []
+        if result and result.segments:
+            for seg in result.segments:
+                rows.append({
+                    "Timestamp": timestamp,
+                    "Transcript": seg.text,
+                    "Score": seg.score
+                })
+        
+        # Fallback if parsing returns empty list
+        if not rows:
+            rows.append({
+                "Timestamp": timestamp,
+                "Transcript": text,
+                "Score": 0
+            })
+            
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        print(f"Error calling Gemini API for transcript parsing: {e}")
+        # Error fallback: return the original raw text with a default score so the app doesn't crash
+        return pd.DataFrame([{
+            "Timestamp": timestamp,
+            "Transcript": text,
+            "Score": 0
+        }])
+
+
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
-    if "user_id" not in session: 
-        return redirect(url_for("login"))
     try:
-        req_data = request.get_json()
-        if not req_data or 'data' not in req_data:
-            return jsonify({"status": "error", "message": "No data structure provided"}), 400
+        data = request.get_json()
+        raw_rows = data.get("raw_rows", [])
         
-        raw_rows = req_data['data']
         if not raw_rows:
-            return jsonify({"status": "success", "processed_data": []})
-        
+            return jsonify({"status": "success", "processed_records": []})
+
         df_raw = pd.DataFrame(raw_rows)
-        df_raw.columns = ['Timestamp', 'Transcript']
-        cache.set('cached_raw', df_raw.to_dict(orient='records'))
         
-        df_processed = df_raw.copy()
-        df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
-        df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
+        # Expecting incoming rows to have Timestamp and Transcript columns
+        if len(df_raw.columns) >= 2:
+            df_raw.columns = ['Timestamp', 'Transcript']
+        else:
+            return jsonify({"status": "error", "message": "Invalid data format received."}), 400
+
+        processed_dfs = []
         
-        cache.set('cached_processed', df_exploded.to_dict(orient='records'))
-        cache.delete('processed_was_overridden')
+        # Iterate through each raw transcript row and apply the Gemini parsing function
+        for _, row in df_raw.iterrows():
+            ts = row['Timestamp']
+            txt = row['Transcript']
+            
+            if pd.isna(txt) or not str(txt).strip():
+                continue
+                
+            df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
+            processed_dfs.append(df_parsed)
+            
+        if processed_dfs:
+            df_final = pd.concat(processed_dfs, ignore_index=True)
+        else:
+            df_final = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
+
+        # Convert to dictionary records for downstream rendering and display
+        processed_records = df_final.to_dict(orient="records")
         
-        return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
+        return jsonify({
+            "status": "success",
+            "processed_records": processed_records
+        })
+
     except Exception as e:
+        print(f"Error in split_dataframe route: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
