@@ -45,7 +45,7 @@ client = Mistral(api_key=API_KEY) if API_KEY else None
 
 # --- User Model ---
 class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     first_name = db.Column(db.String(50))
     last_name = db.Column(db.String(50))
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -322,11 +322,11 @@ def generate_tactics():
     cache.set('selected_format', format_type)
     
     prompt_instruction = f"""You are 5 different soccer scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
-    
+    #prompt_instruction = f"""Provide the key characteristics and skills required for each position in a {format_type} soccer lineup.     Return ONLY a valid JSON list of objects representing a dataframe with columns 'Position' and 'Description'.     Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes and vocal organization."}}]"""
     
     try:
         response_stream = client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-3b-2512",
             messages=[
                 {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
                 {"role": "user", "content": prompt_instruction}
