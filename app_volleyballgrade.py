@@ -163,7 +163,7 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     Analyze the following transcript text, break it down into natural segments/sentences, and for each segment:
     1. Extract the raw segment text.
        - the segement should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
-       - If there is no subject and just a trait - determine if there was a pause and its part of the previous line or keep it seperate with unknown subject.
+       - If there is no subject and just a trait - determine if there was a pause and its part of the previous line.
     2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
        - Score 51 to 100 by integers: Directly evaluates an individual player (e.g., "Player 17 doing great",  "Player C135 is very fast and never stops moving"). The segment has a subject and traits/qualities/descriptions/characteristics. Quantify how specififc the transcript is towards the subject, player.
        - Lower scores / 0: General instructions ("redo the drill"), noise, or sequences of events involving multiple players (e.g., "Player 17 passed to Player 18 and was stopped by Player 20"). 
@@ -174,7 +174,7 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     
     try:
         response = client2.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.1-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
