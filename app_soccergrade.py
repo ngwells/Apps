@@ -14,11 +14,12 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 import plotly.graph_objects as go
+import plotly.express as px
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
-# Cache & DB Configurationchart.js
+# Cache & DB Configuration
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
@@ -475,8 +476,6 @@ def analytics():
     barchart_data = cache.get('barchart_data')
     wordcloud_data = cache.get('wordcloud_data')
     barchart_data_json = json.dumps(barchart_data) if barchart_data else None
-    
-    # --- RETRIEVE SANKEY JSON FROM CACHE ---
     sankey_json = cache.get('sankey_json')
     
     return render_template_string(
@@ -489,7 +488,7 @@ def analytics():
         similarity_results_table=similarity_results_table,
         barchart_data_json=barchart_data_json,
         wordcloud_data=wordcloud_data,
-        sankey_json=sankey_json  # <--- PASS IT TO THE TEMPLATE HERE
+        sankey_json=sankey_json
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
@@ -498,6 +497,7 @@ def clear_metrics_dataframe():
     cache.delete('similarity_results_html')
     cache.delete('barchart_data')
     cache.delete('wordcloud_data')
+    cache.delete('sankey_json')
     return render_template_string("<h3>Results Dataframe Flushed</h3><script>window.location.href='/analytics';</script>")
 
 @app.route("/analytics/compute-metrics", methods=["POST"])
@@ -543,7 +543,7 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
             
-    # --- ROBUST COLUMN NORMALIZATION FOR CSV HEADERS ---
+    # Robust column normalization for uploaded CSV headers
     ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
     
     pos_col = next((c for c in ideal_player_df.columns if c.lower() == 'position'), None)
@@ -557,7 +557,6 @@ def compute_metrics():
         ideal_player_df.rename(columns={desc_target_col: 'Description'}, inplace=True)
     elif len(ideal_player_df.columns) >= 2:
         ideal_player_df.rename(columns={ideal_player_df.columns[1]: 'Description'}, inplace=True)
-    # ---------------------------------------------------
             
     try:
         player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
@@ -592,14 +591,35 @@ def compute_metrics():
         player_indices = {p: i for i, p in enumerate(all_players)}
         position_indices = {pos: i + len(all_players) for i, pos in enumerate(all_positions)}
         
+        # Player-based color mapping with width scaled by recommendation score
+        color_palette = px.colors.qualitative.Plotly * 3
+        player_colors = {player: color_palette[i % len(color_palette)] for i, player in enumerate(all_players)}
+        
+        node_colors = []
+        for label in labels:
+            if label in player_colors:
+                node_colors.append(player_colors[label])
+            else:
+                node_colors.append("#6c757d")
+                
         sources = []
         targets = []
         values = []
+        link_colors = []
         
         for _, row in results_df.iterrows():
-            sources.append(player_indices[row['Player']])
-            targets.append(position_indices[row['Position']])
-            values.append(float(row['Confidence Score']) * 10)
+            player = row['Player']
+            pos = row['Position']
+            score = float(row['Confidence Score'])
+            
+            sources.append(player_indices[player])
+            targets.append(position_indices[pos])
+            # Scale flow thickness by confidence score
+            values.append(score * 50)
+            
+            hex_color = player_colors.get(player, "#17a2b8").lstrip('#')
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.4)")
         
         sankey_fig = go.Figure(go.Sankey(
             node=dict(
@@ -607,13 +627,13 @@ def compute_metrics():
                 thickness=20,
                 line=dict(color="black", width=0.5),
                 label=labels,
-                color="#17a2b8"
+                color=node_colors
             ),
             link=dict(
                 source=sources,
                 target=targets,
                 value=values,
-                color="rgba(23, 162, 184, 0.4)"
+                color=link_colors
             )
         ))
         
@@ -1258,7 +1278,6 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
  .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; } 
 </style> 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> 
-<!-- ADD PLOTLY CDN SCRIPT HERE -->
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 </head> 
 <body> 
@@ -1290,7 +1309,6 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     </div> 
     {% endif %} 
 
-        <!-- ADD SANKEY PLOT HTML CONTAINER HERE -->
     {% if sankey_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
@@ -1300,13 +1318,12 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
             Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
         </script> 
     </div> 
-    {% endif %}
+    {% endif %} 
     
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">📈 Top 3 Candidate Comparisons</h3> 
         <div class="responsive-grid" id="bar-charts-container"></div> 
-...
         <script> 
             const barchartData = {{ barchart_data_json|safe }}; 
             const container = document.getElementById('bar-charts-container'); 
