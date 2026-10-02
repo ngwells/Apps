@@ -543,16 +543,21 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
             
-    ideal_player_df = fix_misspelled_position_header(ideal_player_df)
+    # --- ROBUST COLUMN NORMALIZATION FOR CSV HEADERS ---
+    ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
     
-    if 'Position' not in ideal_player_df.columns:
-        ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
-        if 'Position' not in ideal_player_df.columns:
-            ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
-    
-    if 'Description' not in ideal_player_df.columns:
-        if len(ideal_player_df.columns) >= 2:
-            ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
+    pos_col = next((c for c in ideal_player_df.columns if c.lower() == 'position'), None)
+    if pos_col:
+        ideal_player_df.rename(columns={pos_col: 'Position'}, inplace=True)
+    else:
+        ideal_player_df.rename(columns={ideal_player_df.columns[0]: 'Position'}, inplace=True)
+        
+    desc_target_col = next((c for c in ideal_player_df.columns if c.lower() == 'description'), None)
+    if desc_target_col:
+        ideal_player_df.rename(columns={desc_target_col: 'Description'}, inplace=True)
+    elif len(ideal_player_df.columns) >= 2:
+        ideal_player_df.rename(columns={ideal_player_df.columns[1]: 'Description'}, inplace=True)
+    # ---------------------------------------------------
             
     try:
         player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
@@ -580,13 +585,9 @@ def compute_metrics():
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
         
-        
-        # Inside compute_metrics after calculating results_df:
-        # Build Sankey data mapping Player -> Position with Confidence Score as weight
         all_players = list(results_df['Player'].unique())
         all_positions = list(results_df['Position'].unique())
         
-        # Create a unified label index array
         labels = all_players + all_positions
         player_indices = {p: i for i, p in enumerate(all_players)}
         position_indices = {pos: i + len(all_players) for i, pos in enumerate(all_positions)}
@@ -598,7 +599,6 @@ def compute_metrics():
         for _, row in results_df.iterrows():
             sources.append(player_indices[row['Player']])
             targets.append(position_indices[row['Position']])
-            # Scale confidence score for visual flow thickness
             values.append(float(row['Confidence Score']) * 10)
         
         sankey_fig = go.Figure(go.Sankey(
@@ -618,8 +618,7 @@ def compute_metrics():
         ))
         
         sankey_fig.update_layout(title_text="Player-to-Position Flow Alignment", font_size=11, height=350)
-        sankey_json = sankey_fig.to_json()
-        cache.set('sankey_json', sankey_json)
+        cache.set('sankey_json', sankey_fig.to_json())
         
         barchart_data = []
         for position, pos_data in top_players_per_position.items():
