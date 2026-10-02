@@ -16,4 +16,4 @@ email-validator
 google-genai
 pydantic
 psycopg
-
+plotly
