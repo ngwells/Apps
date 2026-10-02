@@ -13,11 +13,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
+import plotly.graph_objects as go
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
-# Cache & DB Configuration
+# Cache & DB Configurationchart.js
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
@@ -475,6 +476,9 @@ def analytics():
     wordcloud_data = cache.get('wordcloud_data')
     barchart_data_json = json.dumps(barchart_data) if barchart_data else None
     
+    # --- RETRIEVE SANKEY JSON FROM CACHE ---
+    sankey_json = cache.get('sankey_json')
+    
     return render_template_string(
         ANALYTICS_PAGE_HTML,
         raw_table=raw_table,
@@ -484,7 +488,8 @@ def analytics():
         was_overridden=was_overridden,
         similarity_results_table=similarity_results_table,
         barchart_data_json=barchart_data_json,
-        wordcloud_data=wordcloud_data
+        wordcloud_data=wordcloud_data,
+        sankey_json=sankey_json  # <--- PASS IT TO THE TEMPLATE HERE
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
@@ -538,16 +543,21 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
             
-    ideal_player_df = fix_misspelled_position_header(ideal_player_df)
+    # --- ROBUST COLUMN NORMALIZATION FOR CSV HEADERS ---
+    ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
     
-    if 'Position' not in ideal_player_df.columns:
-        ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
-        if 'Position' not in ideal_player_df.columns:
-            ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
-    
-    if 'Description' not in ideal_player_df.columns:
-        if len(ideal_player_df.columns) >= 2:
-            ideal_player_df.rename(columns={ideal_player_df.columns[1]: "Description"}, inplace=True)
+    pos_col = next((c for c in ideal_player_df.columns if c.lower() == 'position'), None)
+    if pos_col:
+        ideal_player_df.rename(columns={pos_col: 'Position'}, inplace=True)
+    else:
+        ideal_player_df.rename(columns={ideal_player_df.columns[0]: 'Position'}, inplace=True)
+        
+    desc_target_col = next((c for c in ideal_player_df.columns if c.lower() == 'description'), None)
+    if desc_target_col:
+        ideal_player_df.rename(columns={desc_target_col: 'Description'}, inplace=True)
+    elif len(ideal_player_df.columns) >= 2:
+        ideal_player_df.rename(columns={ideal_player_df.columns[1]: 'Description'}, inplace=True)
+    # ---------------------------------------------------
             
     try:
         player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
@@ -574,6 +584,41 @@ def compute_metrics():
         results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
+        
+        all_players = list(results_df['Player'].unique())
+        all_positions = list(results_df['Position'].unique())
+        
+        labels = all_players + all_positions
+        player_indices = {p: i for i, p in enumerate(all_players)}
+        position_indices = {pos: i + len(all_players) for i, pos in enumerate(all_positions)}
+        
+        sources = []
+        targets = []
+        values = []
+        
+        for _, row in results_df.iterrows():
+            sources.append(player_indices[row['Player']])
+            targets.append(position_indices[row['Position']])
+            values.append(float(row['Confidence Score']) * 10)
+        
+        sankey_fig = go.Figure(go.Sankey(
+            node=dict(
+                pad=15,
+                thickness=20,
+                line=dict(color="black", width=0.5),
+                label=labels,
+                color="#17a2b8"
+            ),
+            link=dict(
+                source=sources,
+                target=targets,
+                value=values,
+                color="rgba(23, 162, 184, 0.4)"
+            )
+        ))
+        
+        sankey_fig.update_layout(title_text="Player-to-Position Flow Alignment", font_size=11, height=350)
+        cache.set('sankey_json', sankey_fig.to_json())
         
         barchart_data = []
         for position, pos_data in top_players_per_position.items():
@@ -1213,6 +1258,8 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
  .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; } 
 </style> 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> 
+<!-- ADD PLOTLY CDN SCRIPT HERE -->
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 </head> 
 <body> 
 """ + SHARED_NAV + """
@@ -1242,11 +1289,24 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </div> 
     </div> 
     {% endif %} 
+
+        <!-- ADD SANKEY PLOT HTML CONTAINER HERE -->
+    {% if sankey_json %} 
+    <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
+        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
+        <div id="sankey-chart-container" style="width:100%; height:350px;"></div> 
+        <script> 
+            const sankeyData = {{ sankey_json|safe }}; 
+            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
+        </script> 
+    </div> 
+    {% endif %}
     
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">📈 Top 3 Candidate Comparisons</h3> 
         <div class="responsive-grid" id="bar-charts-container"></div> 
+...
         <script> 
             const barchartData = {{ barchart_data_json|safe }}; 
             const container = document.getElementById('bar-charts-container'); 
