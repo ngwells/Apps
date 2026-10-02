@@ -14,10 +14,6 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-# --- VAD & Audio Processing Libraries ---
-import torch
-from pydub import AudioSegment
-
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
@@ -45,70 +41,6 @@ client = Mistral(api_key=API_KEY) if API_KEY else None
 
 API_KEY2 = os.environ.get("GEMINI_API_KEY")
 client2 = genai.Client(api_key=API_KEY2) if API_KEY2 else None
-
-# --- Preload Silero VAD Model for Low-Latency Pause Stripping ---
-try:
-    vad_model, vad_utils = torch.hub.load(
-        repo_or_dir='snakers4/silero-vad',
-        model='silero_vad',
-        force_reload=False
-    )
-    get_speech_timestamps, _, read_audio, _, _ = vad_utils
-    VAD_ENABLED = True
-    print("[VAD Engine] Silero VAD initialized successfully.")
-except Exception as e:
-    VAD_ENABLED = False
-    print(f"[VAD Engine Warning] Failed to load Silero VAD: {e}")
-
-def strip_pauses_from_bytes(audio_bytes: bytes, min_silence_ms: int = 300) -> bytes:
-    """
-    Fast in-memory VAD: Filters out pauses and silence chunks from raw webm/wav bytes 
-    before passing to transcription engine (~15ms CPU overhead).
-    """
-    if not VAD_ENABLED or not audio_bytes:
-        return audio_bytes
-
-    try:
-        # Load raw bytes into PyDub
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        
-        # Resample to 16kHz mono (Silero requirement)
-        mono_16k = audio.set_frame_rate(16000).set_channels(1)
-        
-        # Buffer to memory for VAD tensor reader
-        wav_io = io.BytesIO()
-        mono_16k.export(wav_io, format="wav")
-        wav_io.seek(0)
-        
-        wav_tensor = read_audio(wav_io, sampling_rate=16000)
-        
-        # Detect active speech segments
-        speech_timestamps = get_speech_timestamps(
-            wav_tensor,
-            vad_model,
-            sampling_rate=16000,
-            min_silence_duration_ms=min_silence_ms,
-            speech_pad_ms=50
-        )
-        
-        if not speech_timestamps:
-            return audio_bytes  # Return original if no distinct speech segments isolated
-
-        # Stitch active speech chunks together
-        sample_rate = 16000
-        cleaned_audio = AudioSegment.empty()
-        for segment in speech_timestamps:
-            start_ms = int((segment['start'] / sample_rate) * 1000)
-            end_ms = int((segment['end'] / sample_rate) * 1000)
-            cleaned_audio += audio[start_ms:end_ms]
-
-        output_io = io.BytesIO()
-        cleaned_audio.export(output_io, format="webm")
-        return output_io.getvalue()
-
-    except Exception as e:
-        print(f"[VAD Exception] Non-fatal pause removal failure: {e}")
-        return audio_bytes  # Fail-safe: return unedited audio
 
 
 # --- User Model ---
@@ -230,19 +162,19 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     prompt = f"""
     Analyze the following transcript text, break it down into natural segments/sentences, and for each segment:
     1. Extract the raw segment text.
-       - the segement should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
+       - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
        - If there is no subject and just a trait - determine if there was a pause and its part of the previous line.
     2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
-       - Score 51 to 100 by integers: Directly evaluates an individual player (e.g., "Player 17 doing great",  "Player C135 is very fast and never stops moving"). The segment has a subject and traits/qualities/descriptions/characteristics. Quantify how specififc the transcript is towards the subject, player.
+       - Score 51 to 100 by integers: Directly evaluates an individual player (e.g., "Player 17 doing great",  "Player C135 is very fast and never stops moving"). The segment has a subject and traits/qualities/descriptions/characteristics. Quantify how specific the transcript is towards the subject, player.
        - Lower scores / 0: General instructions ("redo the drill"), noise, or sequences of events involving multiple players (e.g., "Player 17 passed to Player 18 and was stopped by Player 20"). 
-       - IF you are just describing what your seeing in sequence, then this is a low score.
+       - IF you are just describing what you're seeing in sequence, then this is a low score.
        
     Transcript: "{text}"
     """
     
     try:
         response = client2.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-2.5-flash',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -315,7 +247,6 @@ def split_dataframe():
 
         new_records = df_new.to_dict(orient="records")
         
-        # Retrieve existing cached processed records and append the new ones
         existing_processed = cache.get('cached_processed') or []
         updated_processed = existing_processed + new_records
         
@@ -323,7 +254,7 @@ def split_dataframe():
         
         return jsonify({
             "status": "success",
-            "processed_records": new_records # Returns only the newly processed batch to append on frontend
+            "processed_records": new_records
         })
 
     except Exception as e:
@@ -342,25 +273,27 @@ def process_audio():
         return jsonify({"status": "error", "message": "No audio data received"}), 400
     
     audio_file = request.files['audio_data']
-    raw_audio_bytes = audio_file.read()
-
-    # --- STEP 1: FAST IN-MEMORY SILENCE / PAUSE REMOVAL ---
-    cleaned_audio_bytes = strip_pauses_from_bytes(raw_audio_bytes)
-
-    # --- STEP 2: TRANSCRIBE CLEANED AUDIO PAYLOAD ---
+    temp_filename = "temp_recording.webm"
+    audio_file.save(temp_filename)
+    
     try:
-        transcription_response = client.audio.transcriptions.complete(
-            model="voxtral-mini-latest",
-            file={"content": cleaned_audio_bytes, "file_name": "cleaned_recording.webm"}
-        )
+        with open(temp_filename, "rb") as f:
+            transcription_response = client.audio.transcriptions.complete(
+                model="voxtral-mini-latest",
+                file={"content": f.read(), "file_name": temp_filename}
+            )
         detected_text = transcription_response.text.strip()
     except Exception as e:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
         return jsonify({"status": "error", "message": f"Transcription structural layer failure: {str(e)}"}), 500
+    
+    if os.path.exists(temp_filename):
+        os.remove(temp_filename)
     
     if not detected_text:
         detected_text = "[Unintelligible audio recorded]"
     else:
-        # --- ROBUST NUMBER NORMALIZATION FOR 0-99 ---
         ones = {
             'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 
             'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 
@@ -373,21 +306,17 @@ def process_audio():
             'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90
         }
 
-        # Replace compound numbers (e.g., "fifty-four" or "fifty four")
         def replace_compound(match):
             t_word, o_word = match.groups()
             val = tens.get(t_word.lower(), 0) + ones.get(o_word.lower(), 0)
             return str(val)
 
-        # Match hyphenated or spaced tens + ones (e.g. "fifty-four", "fifty four")
         compound_pattern = r'\b(' + '|'.join(tens.keys()) + r')[\s-](' + '|'.join(ones.keys()) + r')\b'
         detected_text = re.sub(compound_pattern, replace_compound, detected_text, flags=re.IGNORECASE)
 
-        # Replace individual tens words (e.g., "fifty")
         for word, val in tens.items():
             detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
 
-        # Replace individual ones words (e.g., "three")
         for word, val in ones.items():
             detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
     
@@ -955,12 +884,11 @@ function appendToSessionDOM(timestamp, transcript) {
     fetch('/soccer-grade/sync-raw', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: sessionRecords }) }); 
 } 
 
-let lastProcessedIndex = 0; // Track how many raw rows have been processed
+let lastProcessedIndex = 0;
 
 processBtn.addEventListener('click', async () => {
     if (sessionRecords.length === 0) return; 
     
-    // Get only the raw rows that haven't been processed yet
     const newRawRows = sessionRecords.slice(lastProcessedIndex);
     if (newRawRows.length === 0) {
         statusDiv.style.color = 'orange';
@@ -979,11 +907,9 @@ processBtn.addEventListener('click', async () => {
         const result = await response.json(); 
         
         if (result.status === 'success') {
-            // Append newly processed records to your existing processedRecords array
             const newlyProcessed = result.processed_records || [];
             processedRecords = processedRecords.concat(newlyProcessed);
             
-            // Render the new rows into the UI list
             newlyProcessed.forEach(row => {
                 const li = document.createElement('li'); 
                 li.className = 'history-item'; 
@@ -995,7 +921,6 @@ processBtn.addEventListener('click', async () => {
                 processedList.appendChild(li); 
             }); 
             
-            // Update index so we don't re-process these rows next time
             lastProcessedIndex = sessionRecords.length;
             
             exportProcessedBtn.disabled = false; 
