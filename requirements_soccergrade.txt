@@ -16,3 +16,6 @@ email-validator
 google-genai
 pydantic
 psycopg
+torch
+silero-vad
+pydub
