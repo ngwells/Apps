@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
-# Cache & DB Configuration
+# Cache & DB Configurationchart.js
 app.config["CACHE_TYPE"] = "FileSystemCache"
 app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
@@ -1287,7 +1287,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     </div> 
     {% endif %} 
 
-    <!-- ADD SANKEY PLOT HTML CONTAINER HERE -->
+        <!-- ADD SANKEY PLOT HTML CONTAINER HERE -->
     {% if sankey_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
@@ -1297,7 +1297,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
             Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
         </script> 
     </div> 
-    {% endif %} 
+    {% endif %}
     
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
