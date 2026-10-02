@@ -476,6 +476,9 @@ def analytics():
     wordcloud_data = cache.get('wordcloud_data')
     barchart_data_json = json.dumps(barchart_data) if barchart_data else None
     
+    # --- RETRIEVE SANKEY JSON FROM CACHE ---
+    sankey_json = cache.get('sankey_json')
+    
     return render_template_string(
         ANALYTICS_PAGE_HTML,
         raw_table=raw_table,
@@ -485,7 +488,8 @@ def analytics():
         was_overridden=was_overridden,
         similarity_results_table=similarity_results_table,
         barchart_data_json=barchart_data_json,
-        wordcloud_data=wordcloud_data
+        wordcloud_data=wordcloud_data,
+        sankey_json=sankey_json  # <--- PASS IT TO THE TEMPLATE HERE
     )
 
 @app.route("/analytics/clear-metrics", methods=["POST"])
