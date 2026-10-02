@@ -19,4 +19,3 @@ psycopg
 torch
 silero-vad
 pydub
-pyaudioop
