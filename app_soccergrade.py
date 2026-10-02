@@ -10,6 +10,9 @@ from wordcloud import WordCloud, STOPWORDS
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
+from pydantic import BaseModel, Field
+from google import genai
+from google.genai import types
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
@@ -20,19 +23,12 @@ app.config["CACHE_DIR"] = os.path.join(app.instance_path, "flask_cache")
 app.config["CACHE_DEFAULT_TIMEOUT"] = 3600
 cache = Cache(app)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
-# db_url = os.environ.get("DATABASE_URL")
-# if db_url and db_url.startswith("postgres://"):
-#     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-# db = SQLAlchemy(app)
 db_url = os.environ.get("DATABASE_URL")
-
 if db_url:
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     
-    # Ensure SSL mode is requested for cloud databases like Supabase
     if "sslmode" not in db_url:
         separator = "&" if "?" in db_url else "?"
         db_url = f"{db_url}{separator}sslmode=require"
@@ -42,6 +38,10 @@ db = SQLAlchemy(app)
 
 API_KEY = os.environ.get("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY) if API_KEY else None
+
+API_KEY2 = os.environ.get("GEMINI_API_KEY")
+client2 = genai.Client(api_key=API_KEY2) if API_KEY2 else None
+
 
 # --- User Model ---
 class User(UserMixin, db.Model):
@@ -55,11 +55,9 @@ with app.app_context():
     db.create_all()
 
 # --- Auth Routes ---
-import re # Make sure this is at the top of your file with the other imports if not already there
-
 def is_valid_email(email):
     """Basic regex to check if the string looks like an email address."""
-    return re.match(r"[^@]+@[^@]+\.[^@]+", email)
+    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", email))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -82,7 +80,6 @@ def register():
     if not is_valid_email(email):
          return "Invalid email format. Please go back and try again.", 400
          
-    # Optional: Check if email already exists to prevent duplicate errors
     if User.query.filter_by(email=email).first():
          return "Email already registered. <a href='/login'>Go to login</a>", 400
 
@@ -99,22 +96,17 @@ def register():
 
 @app.route("/reset-password", methods=["POST"])
 def reset_password():
-    """Updates the user's password without deleting their account."""
     email = request.form.get("email")
     new_password = request.form.get("new_password")
     
-    # Optional: Basic validation
     if not email or not new_password:
         return "Email and new password are required. <a href='/login'>Try again</a>", 400
         
     user = User.query.filter_by(email=email).first()
     
     if user:
-        # Generate a new hash for the new password and update the user record
         hashed_pw = generate_password_hash(new_password)
         user.password = hashed_pw
-        
-        # Commit the changes to the database
         db.session.commit()
         return "Password updated successfully! You can now <a href='/login'>log in</a>."
     else:
@@ -158,33 +150,118 @@ def sync_raw():
         cache.set('cached_raw', req_data['data'])
     return jsonify({"status": "synchronized"})
 
+class TranscriptSegment(BaseModel):
+    text: str = Field(description="The separate raw text segment from the transcript.")
+    score: int = Field(description="Score from 100 to 0 rating how closely the text evaluates a single specific player's trait or characteristic. 100 = direct evaluation of one player. Lower scores (closer to 0) = general instructions, weird text, or event sequences involving multiple players.")
+
+class TranscriptLog(BaseModel):
+    segments: list[TranscriptSegment] = Field(description="List of segmented text chunks extracted from the transcript with their evaluation scores.")
+
+
+def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
+    prompt = f"""
+    Analyze the following transcript text, break it down into natural segments/sentences, and for each segment:
+    1. Extract the raw segment text.
+       - the segement should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
+       - If there is no subject and just a trait - determine if there was a pause and its part of the previous line.
+    2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
+       - Score 51 to 100 by integers: Directly evaluates an individual player (e.g., "Player 17 doing great",  "Player C135 is very fast and never stops moving"). The segment has a subject and traits/qualities/descriptions/characteristics. Quantify how specififc the transcript is towards the subject, player.
+       - Lower scores / 0: General instructions ("redo the drill"), noise, or sequences of events involving multiple players (e.g., "Player 17 passed to Player 18 and was stopped by Player 20"). 
+       - IF you are just describing what your seeing in sequence, then this is a low score.
+       
+    Transcript: "{text}"
+    """
+    
+    try:
+        response = client2.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TranscriptLog,
+                temperature=0.1,
+            ),
+        )
+        
+        result = response.parsed
+        
+        rows = []
+        if result and result.segments:
+            for seg in result.segments:
+                rows.append({
+                    "Timestamp": timestamp,
+                    "Transcript": seg.text,
+                    "Score": seg.score
+                })
+        
+        if not rows:
+            rows.append({
+                "Timestamp": timestamp,
+                "Transcript": text,
+                "Score": 0
+            })
+            
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        print(f"Error calling Gemini API for transcript parsing: {e}")
+        return pd.DataFrame([{
+            "Timestamp": timestamp,
+            "Transcript": text,
+            "Score": 0
+        }])
+
+
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
-    if "user_id" not in session: 
-        return redirect(url_for("login"))
     try:
-        req_data = request.get_json()
-        if not req_data or 'data' not in req_data:
-            return jsonify({"status": "error", "message": "No data structure provided"}), 400
+        data = request.get_json()
+        raw_rows = data.get("raw_rows", [])
         
-        raw_rows = req_data['data']
         if not raw_rows:
-            return jsonify({"status": "success", "processed_data": []})
-        
+            return jsonify({"status": "success", "processed_records": []})
+
         df_raw = pd.DataFrame(raw_rows)
-        df_raw.columns = ['Timestamp', 'Transcript']
-        cache.set('cached_raw', df_raw.to_dict(orient='records'))
         
-        df_processed = df_raw.copy()
-        df_processed['Transcript'] = df_processed['Transcript'].apply(split_comments_smart)
-        df_exploded = df_processed.explode('Transcript').reset_index(drop=True)
+        if len(df_raw.columns) >= 2:
+            df_raw.columns = ['Timestamp', 'Transcript']
+        else:
+            return jsonify({"status": "error", "message": "Invalid data format received."}), 400
+
+        processed_dfs = []
         
-        cache.set('cached_processed', df_exploded.to_dict(orient='records'))
-        cache.delete('processed_was_overridden')
+        for _, row in df_raw.iterrows():
+            ts = row['Timestamp']
+            txt = row['Transcript']
+            
+            if pd.isna(txt) or not str(txt).strip():
+                continue
+                
+            df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
+            processed_dfs.append(df_parsed)
+            
+        if processed_dfs:
+            df_new = pd.concat(processed_dfs, ignore_index=True)
+        else:
+            df_new = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
+
+        new_records = df_new.to_dict(orient="records")
         
-        return jsonify({"status": "success", "processed_data": df_exploded.to_dict(orient='records')})
+        # Retrieve existing cached processed records and append the new ones
+        existing_processed = cache.get('cached_processed') or []
+        updated_processed = existing_processed + new_records
+        
+        cache.set('cached_processed', updated_processed)
+        
+        return jsonify({
+            "status": "success",
+            "processed_records": new_records # Returns only the newly processed batch to append on frontend
+        })
+
     except Exception as e:
+        print(f"Error in split_dataframe route: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 @app.route("/soccer-grade/process-audio", methods=["POST"])
@@ -192,7 +269,7 @@ def process_audio():
     if "user_id" not in session: 
         return redirect(url_for("login"))
     if not client:
-        return jsonify({"status": "error", "message": "Mistral API client context check failed. Missing key variable configuration setup parameters."}), 500
+        return jsonify({"status": "error", "message": "Mistral API client context check failed."}), 500
     
     if 'audio_data' not in request.files:
         return jsonify({"status": "error", "message": "No audio data received"}), 400
@@ -211,13 +288,44 @@ def process_audio():
     except Exception as e:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
-        return jsonify({"status": "error", "message": f"Transcription structural system layer loop failure exception framework block trace: {str(e)}"}), 500
+        return jsonify({"status": "error", "message": f"Transcription structural layer failure: {str(e)}"}), 500
     
     if os.path.exists(temp_filename):
         os.remove(temp_filename)
     
     if not detected_text:
         detected_text = "[Unintelligible audio recorded]"
+    else:
+        # --- ROBUST NUMBER NORMALIZATION FOR 0-99 ---
+        ones = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 
+            'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 
+            'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 
+            'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 
+            'eighteen': 18, 'nineteen': 19
+        }
+        tens = {
+            'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 
+            'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90
+        }
+
+        # Replace compound numbers (e.g., "fifty-four" or "fifty four")
+        def replace_compound(match):
+            t_word, o_word = match.groups()
+            val = tens.get(t_word.lower(), 0) + ones.get(o_word.lower(), 0)
+            return str(val)
+
+        # Match hyphenated or spaced tens + ones (e.g. "fifty-four", "fifty four")
+        compound_pattern = r'\b(' + '|'.join(tens.keys()) + r')[\s-](' + '|'.join(ones.keys()) + r')\b'
+        detected_text = re.sub(compound_pattern, replace_compound, detected_text, flags=re.IGNORECASE)
+
+        # Replace individual tens words (e.g., "fifty")
+        for word, val in tens.items():
+            detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
+
+        # Replace individual ones words (e.g., "three")
+        for word, val in ones.items():
+            detected_text = re.sub(r'\b' + word + r'\b', str(val), detected_text, flags=re.IGNORECASE)
     
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return jsonify({"status": "success", "transcript": detected_text, "timestamp": current_time})
@@ -243,6 +351,7 @@ def upload_manager():
         uploaded_data_table=uploaded_data_table,
         was_overridden=was_overridden
     )
+
 @app.route("/upload-manager/submit-file", methods=["POST"])
 def submit_uploaded_file():
     if "user_id" not in session: return redirect(url_for("login"))
@@ -294,6 +403,7 @@ def create_lineup():
         selected_format=selected_format,
         blueprint_table=blueprint_table
     )
+
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
     if "user_id" not in session: 
@@ -322,7 +432,6 @@ def generate_tactics():
     cache.set('selected_format', format_type)
     
     prompt_instruction = f"""You are 5 different soccer scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
-    #prompt_instruction = f"""Provide the key characteristics and skills required for each position in a {format_type} soccer lineup.     Return ONLY a valid JSON list of objects representing a dataframe with columns 'Position' and 'Description'.     Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes and vocal organization."}}]"""
     
     try:
         response_stream = client.chat.complete(
@@ -355,8 +464,6 @@ def generate_tactics():
         return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
 
 
-
-
 @app.route("/analytics")
 def analytics():
     if "user_id" not in session: return redirect(url_for("login"))
@@ -371,7 +478,6 @@ def analytics():
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     similarity_results_table = cache.get('similarity_results_html')
     
-    # Retrieve pre-processed chart data from cache
     barchart_data = cache.get('barchart_data')
     wordcloud_data = cache.get('wordcloud_data')
     barchart_data_json = json.dumps(barchart_data) if barchart_data else None
@@ -387,6 +493,7 @@ def analytics():
         barchart_data_json=barchart_data_json,
         wordcloud_data=wordcloud_data
     )
+
 @app.route("/analytics/clear-metrics", methods=["POST"])
 def clear_metrics_dataframe():
     if "user_id" not in session: return redirect(url_for("login"))
@@ -409,18 +516,12 @@ def compute_metrics():
         return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
         
     player_evals_df = pd.DataFrame(processed_session)
-    
-    # ==========================================
-    # NEW FIX: Resilient Column Mapping
-    # ==========================================
     player_evals_df.columns = [str(c).strip() for c in player_evals_df.columns]
     
-    # 1. Safely handle the 'Player' column
     player_col = next((c for c in player_evals_df.columns if c.lower() == 'player'), None)
     if player_col:
         player_evals_df.rename(columns={player_col: 'Player'}, inplace=True)
     else:
-        # Fallback: Extract from the best available text column
         target_col = 'Transcript' if 'Transcript' in player_evals_df.columns else (
             'Description' if 'Description' in player_evals_df.columns else player_evals_df.columns[-1]
         )
@@ -428,7 +529,6 @@ def compute_metrics():
             lambda x: re.search(r'(player\s+\d+|\d+)', str(x), re.I).group(1) if re.search(r'(player\s+\d+|\d+)', str(x), re.I) else "Unknown"
         )
         
-    # 2. Safely handle the 'Description' column for embeddings
     desc_col = next((c for c in player_evals_df.columns if c.lower() == 'description'), None)
     if desc_col:
         player_evals_df.rename(columns={desc_col: 'Description'}, inplace=True)
@@ -436,7 +536,6 @@ def compute_metrics():
         player_evals_df['Description'] = player_evals_df['Transcript']
     else:
         player_evals_df['Description'] = player_evals_df[player_evals_df.columns[-1]]
-    # ==========================================
         
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
@@ -449,10 +548,8 @@ def compute_metrics():
     ideal_player_df = fix_misspelled_position_header(ideal_player_df)
     
     if 'Position' not in ideal_player_df.columns:
-        # Strip whitespace from all column names first
         ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
         if 'Position' not in ideal_player_df.columns:
-            print(f"Warning: Forcing rename of column '{ideal_player_df.columns[0]}' to 'Position'")
             ideal_player_df.rename(columns={ideal_player_df.columns[0]: "Position"}, inplace=True)
     
     if 'Description' not in ideal_player_df.columns:
@@ -485,9 +582,6 @@ def compute_metrics():
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
         
-        # =======================================================
-        # Generate JSON Data for Frontend Chart.js Bar Charts
-        # =======================================================
         barchart_data = []
         for position, pos_data in top_players_per_position.items():
             barchart_data.append({
@@ -497,9 +591,6 @@ def compute_metrics():
             })
         cache.set('barchart_data', barchart_data)
         
-        # =======================================================
-        # Generate Native WordCloud Images (No Matplotlib Grid)
-        # =======================================================
         player_text = player_evals_df.groupby('Player')['Description'].apply(lambda x: ' '.join(x.astype(str))).to_dict()
         stopwords = set(STOPWORDS)
         wordcloud_data = []
@@ -519,7 +610,6 @@ def compute_metrics():
                 prefer_horizontal=0.8
             ).generate(clean_tokens)
             
-            # Use native WordCloud to_image() method to bypass matplotlib
             img = wc.to_image()
             buf = io.BytesIO()
             img.save(buf, format='PNG')
@@ -586,98 +676,44 @@ LOGIN_PAGE_HTML = """
 </body>
 </html>
 """
-# --- COMMON STYLES AND RESPONSIVE GRID CONFIGURATION ---
+
 SHARED_CSS = """
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
-
   gtag('config', 'G-W0VN6S115E');
 </script>
-
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369" crossorigin="anonymous"></script>
-
 <style>
  :root {--primary-color: #007bff; --success-color: #28a745; --danger-color: #dc3545; --info-color: #17a2b8; --purple-color: #6f42c1; --dark-bg: #f4f6f9; --card-bg: #ffffff; --text-main: #333333; }
  * { box-sizing: border-box; }
  body {font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: var(--dark-bg); color: var(--text-main); line-height: 1.5; }
  .container {background: var(--card-bg); width: 100%; max-width: 1100px; margin: 10px auto 40px auto; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
  h1, h2, h3, h4 { margin-top: 0; color: #111; }
- /* Responsive Buttons & Containers */
  .btn-group {display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0; justify-content: center; }
  button, .btn-link {flex: 1 1 calc(50% - 10px); min-width: 140px; padding: 12px 18px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; border-radius: 8px; transition: all 0.2s ease; text-align: center; display: inline-block; }
  @media (min-width: 768px) {body { padding: 30px; } .container { padding: 40px; } button, .btn-link { flex: 0 1 auto; } }
  button:disabled { background: #ccc !important; cursor: not-allowed; transform: none !important; }
- /* Responsive Tables */
  .table-wrap {width: 100%; overflow-x: auto; margin-top: 15px; border: 1px solid #dee2e6; border-radius: 6px; -webkit-overflow-scrolling: touch; }
  table {width: 100%; border-collapse: collapse; background: white; white-space: nowrap; }
  th, td {border: 1px solid #dee2e6; padding: 10px 14px; text-align: left; font-size: 13px; }
  th { background-color: #f8f9fa; position: sticky; top: 0; }
- /* Fully Responsive Grid for Plots */
  .responsive-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 15px; }
  .plot-card {background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 15px; text-align: center; display: flex; flex-direction: column; }
  .plot-card h4 {margin: 0 0 10px 0; font-size: 14px; color: #333; }
- /* Forces chart.js canvas to resize correctly */
  .chart-container {position: relative; height: 200px; width: 100%; }
  .plot-card img {width: 100%; height: auto; border-radius: 4px; }
-
- /* Modern Adaptive Navigation */
- .top-nav {
-     display: flex;
-     flex-wrap: wrap;
-     gap: 8px;
-     background: var(--card-bg);
-     padding: 12px 15px;
-     border-radius: 10px;
-     box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-     margin: 10px auto 20px auto;
-     width: 100%;
-     max-width: 1100px;
-     align-items: center;
-     justify-content: center;
- }
- .top-nav a {
-     text-decoration: none;
-     color: var(--text-main);
-     font-size: 13px;
-     font-weight: 600;
-     padding: 8px 14px;
-     border-radius: 6px;
-     transition: all 0.2s ease-in-out;
-     background: var(--dark-bg);
-     display: flex;
-     align-items: center;
-     gap: 6px;
- }
- .top-nav a:hover {
-     background: var(--primary-color);
-     color: white;
-     transform: translateY(-2px);
- }
- .top-nav a.nav-home {
-     background: #333;
-     color: white;
- }
- .top-nav a.nav-home:hover {
-     background: #111;
- }
- @media (min-width: 768px) {
-     .top-nav {
-         justify-content: flex-start;
-         padding: 15px 25px;
-         gap: 12px;
-     }
-     .top-nav a {
-         font-size: 14px;
-         padding: 10px 16px;
-     }
- }
+ .top-nav { display: flex; flex-wrap: wrap; gap: 8px; background: var(--card-bg); padding: 12px 15px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin: 10px auto 20px auto; width: 100%; max-width: 1100px; align-items: center; justify-content: center; }
+ .top-nav a { text-decoration: none; color: var(--text-main); font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 6px; transition: all 0.2s ease-in-out; background: var(--dark-bg); display: flex; align-items: center; gap: 6px; }
+ .top-nav a:hover { background: var(--primary-color); color: white; transform: translateY(-2px); }
+ .top-nav a.nav-home { background: #333; color: white; }
+ .top-nav a.nav-home:hover { background: #111; }
+ @media (min-width: 768px) { .top-nav { justify-content: flex-start; padding: 15px 25px; gap: 12px; } .top-nav a { font-size: 14px; padding: 10px 16px; } }
 </style>
 """
 
-# --- SHARED NAVIGATION HTML ---
 SHARED_NAV = """
 <nav class="top-nav">
     <a href="/" class="nav-home">🏠 Hub</a>
@@ -688,7 +724,6 @@ SHARED_NAV = """
 </nav>
 """
 
-# --- PAGE A: CENTRAL HUB LANDING PAGE ---
 LANDING_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
@@ -759,7 +794,6 @@ function clearFullSession() {
 </body> 
 </html>"""
 
-# --- PAGE B: VOICE RECORDER & ROWS SPLITTER INTERFACE ---
 SOCCER_INTERFACE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
@@ -778,8 +812,10 @@ SOCCER_INTERFACE_HTML = """<!DOCTYPE html>
  @media(min-width: 768px) { .flex-container { grid-template-columns: 1fr 1fr; } } 
  .history-container { width: 100%; text-align: left; } 
  .history-list {background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 0; list-style: none; max-height: 300px; overflow-y: auto; } 
- .history-item { padding: 12px; border-bottom: 1px solid #eee; font-size: 13px; } 
- .timestamp { color: #888; font-weight: bold; margin-right: 5px; font-size: 11px; } 
+ .history-item { padding: 12px; border-bottom: 1px solid #eee; font-size: 13px; display: flex; justify-content: space-between; align-items: center; } 
+ .timestamp { color: #888; font-weight: bold; margin-right: 5px; font-size: 11px; flex-shrink: 0; } 
+ .transcript-text { flex-grow: 1; margin: 0 10px; }
+ .score-badge { background: #e2e8f0; color: #2d3748; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; flex-shrink: 0; }
 </style> 
 </head> 
 <body> 
@@ -803,10 +839,10 @@ SOCCER_INTERFACE_HTML = """<!DOCTYPE html>
             <ul id="history-list" class="history-list"> 
                 {% if has_raw %} 
                     {% for row in raw_records %} 
-                        <li class="history-item"><span class="timestamp">[{{ row.Timestamp }}]</span> {{ row.Transcript }}</li> 
+                        <li class="history-item"><span class="timestamp">[{{ row.Timestamp }}]</span> <span class="transcript-text">{{ row.Transcript }}</span></li> 
                     {% endfor %} 
                 {% else %} 
-                    <li class="history-item" id="empty-state" style="color: #aaa; text-align:center;">No raw records yet.</li> 
+                    <li class="history-item" id="empty-state" style="color: #aaa; text-align:center; display:block;">No raw records yet.</li> 
                 {% endif %} 
             </ul> 
         </div> 
@@ -815,10 +851,14 @@ SOCCER_INTERFACE_HTML = """<!DOCTYPE html>
             <ul id="processed-list" class="history-list"> 
                 {% if has_processed %} 
                     {% for row in processed_records %} 
-                        <li class="history-item"><span class="timestamp">[{{ row.Timestamp }}]</span> {{ row.Transcript }}</li> 
+                        <li class="history-item">
+                            <span class="timestamp">[{{ row.Timestamp }}]</span> 
+                            <span class="transcript-text">{{ row.Transcript }}</span>
+                            <span class="score-badge">Score: {{ row.Score }}</span>
+                        </li> 
                     {% endfor %} 
                 {% else %} 
-                    <li class="history-item" id="empty-processed" style="color: #aaa; text-align:center;">No split data yet.</li> 
+                    <li class="history-item" id="empty-processed" style="color: #aaa; text-align:center; display:block;">No split data yet.</li> 
                 {% endif %} 
             </ul> 
         </div> 
@@ -846,43 +886,80 @@ function appendToSessionDOM(timestamp, transcript) {
     processBtn.disabled = false; 
     const li = document.createElement('li'); 
     li.className = 'history-item'; 
-    li.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${transcript}`; 
+    li.innerHTML = `<span class="timestamp">[${timestamp}]</span> <span class="transcript-text">${transcript}</span>`; 
     historyList.insertBefore(li, historyList.firstChild); 
     fetch('/soccer-grade/sync-raw', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: sessionRecords }) }); 
 } 
 
+let lastProcessedIndex = 0; // Track how many raw rows have been processed
+
 processBtn.addEventListener('click', async () => {
     if (sessionRecords.length === 0) return; 
-    statusDiv.innerText = "Status: Split-processing transcripts..."; 
+    
+    // Get only the raw rows that haven't been processed yet
+    const newRawRows = sessionRecords.slice(lastProcessedIndex);
+    if (newRawRows.length === 0) {
+        statusDiv.style.color = 'orange';
+        statusDiv.innerText = "Status: No new raw rows to process!";
+        return;
+    }
+
+    statusDiv.innerText = `Status: Processing ${newRawRows.length} new transcript(s)...`; 
+    
     try {
-        const response = await fetch('/soccer-grade/split-dataframe', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: sessionRecords.map(r => ({ timestamp: r.Timestamp, transcript: r.Transcript })) }) }); 
+        const response = await fetch('/soccer-grade/split-dataframe', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ raw_rows: newRawRows.map(r => [r.Timestamp, r.Transcript]) }) 
+        }); 
         const result = await response.json(); 
+        
         if (result.status === 'success') {
-            processedRecords = result.processed_data; 
-            processedList.innerHTML = ''; 
-            processedRecords.forEach(row => {
+            // Append newly processed records to your existing processedRecords array
+            const newlyProcessed = result.processed_records || [];
+            processedRecords = processedRecords.concat(newlyProcessed);
+            
+            // Render the new rows into the UI list
+            newlyProcessed.forEach(row => {
                 const li = document.createElement('li'); 
                 li.className = 'history-item'; 
-                li.innerHTML = `<span class="timestamp">[${row.Timestamp}]</span> ${row.Transcript}`; 
+                li.innerHTML = `
+                    <span class="timestamp">[${row.Timestamp}]</span> 
+                    <span class="transcript-text">${row.Transcript}</span> 
+                    <span class="score-badge">Score: ${row.Score}</span>
+                `; 
                 processedList.appendChild(li); 
             }); 
+            
+            // Update index so we don't re-process these rows next time
+            lastProcessedIndex = sessionRecords.length;
+            
             exportProcessedBtn.disabled = false; 
             statusDiv.style.color = 'green'; 
-            statusDiv.innerText = "Status: Split processing finished and cached!"; 
-        } 
+            statusDiv.innerText = "Status: New rows processed and appended!";        
+        } else {
+            statusDiv.style.color = 'red'; 
+            statusDiv.innerText = "Error: " + (result.message || "Unknown error");
+        }
     } catch (err) {
         statusDiv.style.color = 'red'; 
         statusDiv.innerText = "Server error during row processing."; 
     } 
-}); 
+});
 
-async function downloadCSV(records, filename) {
-    let csvContent = "Timestamp,Transcript\\n"; 
+async function downloadCSV(records, filename, isProcessed = false) {
+    if (!records || records.length === 0) return;
+    let csvContent = isProcessed ? "Timestamp,Transcript,Score\\n" : "Timestamp,Transcript\\n"; 
     records.forEach(row => {
         let text = row.Transcript || ""; 
         let time = row.Timestamp || ""; 
         let cleanTranscript = text.replace(/"/g, '""'); 
-        csvContent += `"${time}","${cleanTranscript}"\\n`; 
+        if (isProcessed) {
+            let score = row.Score !== undefined ? row.Score : 0;
+            csvContent += `"${time}","${cleanTranscript}",${score}\\n`;
+        } else {
+            csvContent += `"${time}","${cleanTranscript}"\\n`; 
+        }
     }); 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); 
     const url = URL.createObjectURL(blob); 
@@ -894,8 +971,8 @@ async function downloadCSV(records, filename) {
     document.body.removeChild(link); 
 } 
 
-exportBtn.addEventListener('click', () => downloadCSV(sessionRecords, 'voice_history.csv')); 
-exportProcessedBtn.addEventListener('click', () => downloadCSV(processedRecords, 'processed_voice_data.csv')); 
+exportBtn.addEventListener('click', () => downloadCSV(sessionRecords, 'voice_history.csv', false)); 
+exportProcessedBtn.addEventListener('click', () => downloadCSV(processedRecords, 'processed_voice_data.csv', true)); 
 
 startBtn.addEventListener('click', async () => {
     audioChunks = []; 
@@ -942,7 +1019,6 @@ stopBtn.addEventListener('click', () => {
 </body> 
 </html>"""
 
-# --- PAGE C: DATA UPLOAD MANAGER ---
 UPLOAD_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
@@ -1009,7 +1085,7 @@ UPLOAD_PAGE_HTML = """<!DOCTYPE html>
             <form action="/upload-manager/override-processed" method="POST" enctype="multipart/form-data"> 
                 <label style="font-weight:bold; display:block; color:#c0392b;">Sandbox Testing Mock</label> 
                 <span style="font-size: 11px; color: #7f8c8d; display:block;">Forces override of Processed & Exploded frame</span> 
-                <span style="font-size: 11px; color: #7f8c8d; display:block;">Create a 2 column csv file with 'Player' and 'Description'</span> 
+                <span style="font-size: 11px; color: #7f8c8d; display:block;">Create csv file with 'Timestamp', 'Transcript', and 'Score'</span> 
                 <input type="file" name="mock_processed_csv" accept=".csv" required> 
                 <button type="submit" style="background: var(--danger-color); color:white;">Inject Test Override</button> 
             </form> 
@@ -1019,7 +1095,6 @@ UPLOAD_PAGE_HTML = """<!DOCTYPE html>
 </body> 
 </html>"""
 
-# --- PAGE D: CREATE LINE UP INTERFACE ---
 LINEUP_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
@@ -1131,7 +1206,6 @@ function clearBlueprintFrame() {
 </body> 
 </html>"""
 
-# --- PAGE E: ANALYTICS & REPORTING INTERFACE ---
 ANALYTICS_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
@@ -1188,7 +1262,6 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
             const barchartData = {{ barchart_data_json|safe }}; 
             const container = document.getElementById('bar-charts-container'); 
             barchartData.forEach((data, index) => {
-                // Create Card structure 
                 const card = document.createElement('div'); 
                 card.className = 'plot-card'; 
                 card.innerHTML = ` 
@@ -1199,7 +1272,6 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
                 `; 
                 container.appendChild(card); 
                 
-                // Render interactive chart 
                 const ctx = document.getElementById(`chart-${index}`).getContext('2d'); 
                 new Chart(ctx, {
                     type: 'bar', 
@@ -1285,22 +1357,11 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
 </div> 
 </body> 
 </html>"""
-# --- PASTE ALL YOUR UTILITY FUNCTIONS (split_comments_smart, etc.) HERE ---
+
 
 # =====================================================================
 # # SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                       #
 # =====================================================================
-def split_comments_smart(text):
-    pattern = (
-        r"[.,;\s]+"
-        r"(?<!\bto\s)(?<!\bfrom\s)(?<!\bwith\s)(?<!\bfor\s)(?<!\bby\s)"
-        r"(?<!\bon\s)(?<!\bof\s)(?<!\band\s)(?<!\bor\s)(?<!\bat\s)"
-        r"(?<!\bnumber\s)(?<!\bplayer\s)"
-        r"(?=\b(?:number\s+\d+|player\s+\d+|\d+)\b)"
-    )
-    segments = re.split(pattern, text, flags=re.IGNORECASE)
-    return [seg.strip() for seg in segments if seg.strip()]
-
 def get_mistral_embeddings(text):
     url = "https://api.mistral.ai/v1/embeddings"
     headers = {
@@ -1343,7 +1404,6 @@ def fix_misspelled_position_header(df):
     if best_col is not None and max_matches >= 5:
         df.rename(columns={best_col: "Position"}, inplace=True)
     return df
-
 
 
 if __name__ == "__main__":
