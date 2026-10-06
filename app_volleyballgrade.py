@@ -1174,10 +1174,33 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     <h2>Line Up Builder Workspace</h2> 
     <p style="color:#666; text-align: center;">Select a configuration grid below to evaluate tactical alignment blueprints via Mistral AI.</p> 
     
-    <div class="placeholder-box"> 
-        <h3 style="color: #856404; margin: 0; font-size: 15px;">Canvas System Status</h3> 
-        <p style="color: #666; font-size: 13px; margin: 5px 0 0 0;">Visual drag-and-drop arranger components are actively staging.</p> 
-    </div> 
+<h3>1. Select Sport</h3>
+<div class="format-selector sport-selector">
+    <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
+    <button type="button" id="btn-basketball" class="btn-format {% if selected_sport == 'basketball' %}active{% endif %}" onclick="selectSport(this, 'basketball')">Basketball</button>
+    <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
+</div>
+
+<div id="matrix-format-container">
+    {% if selected_sport == 'soccer' %}
+        <h3>1. Select Roster Matrix Format</h3>
+        <div class="format-selector">
+            <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
+            <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
+            <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
+        </div>
+    {% elif selected_sport == 'basketball' %}
+        <h3>1. Select Roster Matrix Format</h3>
+        <div class="format-selector">
+            <button type="button" id="btn-3x2" class="btn-format {% if selected_format == '3x2' %}active{% endif %}" onclick="selectFormat(this, '3x2')">3x2</button>
+        </div>
+    {% elif selected_sport == 'volleyball' %}
+        <h3>1. Select Roster Matrix Format</h3>
+        <div class="format-selector">
+            <button type="button" id="btn-3x3" class="btn-format {% if selected_format == '3x3' %}active{% endif %}" onclick="selectFormat(this, '3x3')">3x3</button>
+        </div>
+    {% endif %}
+</div>
     
     <h3>1. Select Sport</h3>
 <div class="format-selector sport-selector">
