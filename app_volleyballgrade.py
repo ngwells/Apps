@@ -387,6 +387,7 @@ def create_lineup():
     raw_session = cache.get('cached_raw') or []
     processed_session = cache.get('cached_processed') or []
     uploaded_session = cache.get('cached_uploaded') or []
+    selected_sport = cache.get('selected_sport') or ''
     selected_format = cache.get('selected_format') or ''
     blueprint_table = cache.get('cached_blueprint')
     
@@ -395,9 +396,19 @@ def create_lineup():
         raw_count=len(raw_session),
         processed_count=len(processed_session),
         uploaded_count=len(uploaded_session),
+        selected_sport=selected_sport,
         selected_format=selected_format,
         blueprint_table=blueprint_table
     )
+
+@app.route("/create-lineup/select-sport", methods=["POST"])
+def select_sport_sync():
+    if "user_id" not in session: 
+        return redirect(url_for("login"))
+    req_body = request.get_json()
+    if req_body and 'sport_type' in req_body:
+        cache.set('selected_sport', req_body['sport_type'])
+    return jsonify({"status": "sport_cached"})
 
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
@@ -426,13 +437,13 @@ def generate_tactics():
     format_type = req_body.get("format_type", "11v11")
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different soccer scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
+    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
     
     try:
         response_stream = client.chat.complete(
             model="ministral-3b-2512",
             messages=[
-                {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
+                {"role": "system", "content": "You are an advanced tactics architect. Output requested data exclusively as clean JSON arrays."},
                 {"role": "user", "content": prompt_instruction}
             ],
             response_format={"type": "json_object"}
@@ -543,7 +554,6 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
             
-    # Robust column normalization for uploaded CSV headers
     ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
     
     pos_col = next((c for c in ideal_player_df.columns if c.lower() == 'position'), None)
@@ -591,7 +601,6 @@ def compute_metrics():
         player_indices = {p: i for i, p in enumerate(all_players)}
         position_indices = {pos: i + len(all_players) for i, pos in enumerate(all_positions)}
         
-        # Player-based color mapping with width scaled by recommendation score
         color_palette = px.colors.qualitative.Plotly * 3
         player_colors = {player: color_palette[i % len(color_palette)] for i, player in enumerate(all_players)}
         
@@ -614,7 +623,6 @@ def compute_metrics():
             
             sources.append(player_indices[player])
             targets.append(position_indices[pos])
-            # Scale flow thickness by confidence score
             values.append(score * 50)
             
             hex_color = player_colors.get(player, "#17a2b8").lstrip('#')
@@ -692,11 +700,11 @@ def compute_metrics():
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
 <html>
-<head><title>Soccer Grader Login</title></head>
+<head><title>Sports Grader Login</title></head>
 <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
     
     <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 300px; text-align: center;">
-        <h2>Soccer Grader Login</h2>
+        <h2>Sports Grader Login</h2>
         <form action="/login" method="POST">
             <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
             <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
@@ -1174,37 +1182,34 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     <h2>Line Up Builder Workspace</h2> 
     <p style="color:#666; text-align: center;">Select a configuration grid below to evaluate tactical alignment blueprints via Mistral AI.</p> 
     
-<h3>1. Select Sport</h3>
-<div class="format-selector sport-selector">
-    <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
-    <button type="button" id="btn-basketball" class="btn-format {% if selected_sport == 'basketball' %}active{% endif %}" onclick="selectSport(this, 'basketball')">Basketball</button>
-    <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
-</div>
+    <h3>1. Select Sport</h3>
+    <div class="format-selector sport-selector">
+        <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
+        <button type="button" id="btn-basketball" class="btn-format {% if selected_sport == 'basketball' %}active{% endif %}" onclick="selectSport(this, 'basketball')">Basketball</button>
+        <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
+    </div>
 
-<div id="matrix-format-container">
-    {% if selected_sport == 'soccer' %}
-        <h3>1. Select Roster Matrix Format</h3>
-        <div class="format-selector">
-            <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
-            <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
-            <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
-        </div>
-    {% elif selected_sport == 'basketball' %}
-        <h3>1. Select Roster Matrix Format</h3>
-        <div class="format-selector">
-            <button type="button" id="btn-3x2" class="btn-format {% if selected_format == '3x2' %}active{% endif %}" onclick="selectFormat(this, '3x2')">3x2</button>
-        </div>
-    {% elif selected_sport == 'volleyball' %}
-        <h3>1. Select Roster Matrix Format</h3>
-        <div class="format-selector">
-            <button type="button" id="btn-3x3" class="btn-format {% if selected_format == '3x3' %}active{% endif %}" onclick="selectFormat(this, '3x3')">3x3</button>
-        </div>
-    {% endif %}
-</div>
-    
+    <div id="matrix-format-container">
+        {% if selected_sport == 'soccer' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
+                <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
+            </div>
+        {% elif selected_sport == 'basketball' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-3x2" class="btn-format {% if selected_format == '3x2' %}active{% endif %}" onclick="selectFormat(this, '3x2')">3x2</button>
+            </div>
+        {% elif selected_sport == 'volleyball' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-3x3" class="btn-format {% if selected_format == '3x3' %}active{% endif %}" onclick="selectFormat(this, '3x3')">3x3</button>
+            </div>
+        {% endif %}
+    </div>
 
-
-    
     <div class="btn-group"> 
         <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()">Execute Blueprint Generation</button> 
         <button type="button" id="clear-btn" class="btn-clear-frame" onclick="clearBlueprintFrame()">Clear Frame</button> 
@@ -1232,9 +1237,50 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 <script> 
 let selectedFormatName = "{{ selected_format|safe }}"; 
 
+function selectSport(button, sportType) {
+    document.querySelectorAll('.sport-selector .btn-format').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    button.classList.add('active');
+
+    const container = document.getElementById('matrix-format-container');
+    container.innerHTML = '';
+
+    if (sportType === 'soccer') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-7v7" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-9v9" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
+                <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+            </div>
+        `;
+    } else if (sportType === 'basketball') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-3x2" class="btn-format" onclick="selectFormat(this, '3x2')">3x2</button>
+            </div>
+        `;
+    } else if (sportType === 'volleyball') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-3x3" class="btn-format" onclick="selectFormat(this, '3x3')">3x3</button>
+            </div>
+        `;
+    }
+
+    fetch('/create-lineup/select-sport', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sport_type: sportType })
+    });
+}
+
 function selectFormat(clickedButton, formatValue) {
-    const buttons = document.querySelectorAll('.btn-format'); 
-    buttons.forEach(btn => btn.classList.remove('active')); 
+    const parentSelector = clickedButton.closest('.format-selector');
+    parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active')); 
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
     fetch('/create-lineup/select-format', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: formatValue }) }); 
