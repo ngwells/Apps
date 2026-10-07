@@ -188,44 +188,54 @@ def split_dataframe():
            - Score 51 to 100 by integers: Directly evaluates an individual player.
            - Lower scores / 0: General instructions, noise, or multi-player sequences.
            
+        Return a JSON object with a single key "segments" containing a list of objects, each with "text" (string) and "score" (integer).
+           
         Batch Transcripts:
         {transcript_batch_str}
         """
         
-        chosen_model = random.choice(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'])
+        chosen_model = random.choice(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
         
         response = client2.models.generate_content(
             model=chosen_model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=TranscriptLog.model_json_schema(), # Fixed: pass JSON schema dict
                 temperature=0.1,
             ),
         )
         
         rows = []
-        result = getattr(response, 'parsed', None)
+        parsed_segments = []
         
-        # If response.parsed isn't populated directly by the SDK with structured output, 
-        # try loading the raw text response safely as JSON fallback:
-        if not result and getattr(response, 'text', None):
+        if getattr(response, 'text', None):
             try:
-                parsed_dict = json.loads(response.text)
-                if "segments" in parsed_dict:
-                    result = type('Obj', (object,), {
-                        'segments': [type('Seg', (object,), s) for s in parsed_dict['segments']]
-                    })()
+                cleaned_text = response.text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:-3].strip()
+                elif cleaned_text.startswith("```"):
+                    cleaned_text = cleaned_text[3:-3].strip()
+                    
+                data_dict = json.loads(cleaned_text)
+                parsed_segments = data_dict.get("segments", [])
             except Exception as parse_err:
-                print(f"Manual JSON fallback parse error: {parse_err}")
+                print(f"JSON parsing error: {parse_err}")
 
-        if result and getattr(result, 'segments', None):
+        if parsed_segments:
             default_ts = raw_rows[0].get('Timestamp', '') if raw_rows else ''
-            for seg in result.segments:
+            for seg in parsed_segments:
+                # Handle both dict items and object attributes safely
+                if isinstance(seg, dict):
+                    seg_text = seg.get('text', '')
+                    seg_score = int(seg.get('score', 0))
+                else:
+                    seg_text = getattr(seg, 'text', '')
+                    seg_score = int(getattr(seg, 'score', 0))
+                    
                 rows.append({
                     "Timestamp": default_ts,
-                    "Transcript": getattr(seg, 'text', str(seg)),
-                    "Score": int(getattr(seg, 'score', 0))
+                    "Transcript": seg_text,
+                    "Score": seg_score
                 })
         
         # Fallback if model parsing returns empty
@@ -245,10 +255,9 @@ def split_dataframe():
         
         gc.collect()
         return jsonify({"status": "success", "processed_records": new_records})
-        
     except Exception as e:
         import traceback
-        traceback.print_exc() # Prints exact line number and error to server terminal
+        traceback.print_exc()
         print(f"Error in split_dataframe batch route: {e}")
         gc.collect()
         return jsonify({"status": "error", "message": str(e)}), 500
