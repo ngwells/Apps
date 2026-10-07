@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 import plotly.graph_objects as go
 import plotly.express as px
+import gc
 
 
 app = Flask(__name__)
