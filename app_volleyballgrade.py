@@ -160,6 +160,7 @@ class TranscriptSegment(BaseModel):
 class TranscriptLog(BaseModel):
     segments: list[TranscriptSegment] = Field(description="List of segmented text chunks extracted from the transcript with their evaluation scores.")
 
+import random
 
 def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     prompt = f"""
@@ -175,9 +176,12 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     Transcript: "{text}"
     """
     
+    # Randomly select between two models to balance quota usage
+    chosen_model = random.choice(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', gemini-2.5-flash-lite])
+    
     try:
         response = client2.models.generate_content(
-            model='gemini-3.5-flash-lite',
+            model=chosen_model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -187,7 +191,6 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
         )
         
         result = getattr(response, 'parsed', None)
-        
         rows = []
         if result and getattr(result, 'segments', None):
             for seg in result.segments:
@@ -207,13 +210,12 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
         return pd.DataFrame(rows)
 
     except Exception as e:
-        print(f"Error calling Gemini API for transcript parsing: {e}")
+        print(f"Error calling Gemini API ({chosen_model}) for transcript parsing: {e}")
         return pd.DataFrame([{
             "Timestamp": timestamp,
             "Transcript": text,
             "Score": 0
         }])
-
 
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
