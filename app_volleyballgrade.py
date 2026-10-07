@@ -478,12 +478,25 @@ def generate_tactics():
         data = api_response.json()
         raw_content = data['choices'][0]['message']['content'].strip()
         
+        # Clean markdown code blocks
         if "```" in raw_content:
             raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
             raw_content = re.sub(r"\s*```$", "", raw_content)
             raw_content = raw_content.strip()
             
-        parsed_json = json.loads(raw_content)
+        # Sanitize common LLM JSON syntax issues (trailing commas before closing brackets/braces)
+        raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
+        
+        try:
+            parsed_json = json.loads(raw_content)
+        except json.JSONDecodeError as jde:
+            # Fallback extraction if outer text contains extra commentary
+            match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
+            if match:
+                cleaned_match = re.sub(r',\s*([\]}])', r'\1', match.group(1))
+                parsed_json = json.loads(cleaned_match)
+            else:
+                raise jde
         
         if isinstance(parsed_json, dict):
             parsed_list = []
