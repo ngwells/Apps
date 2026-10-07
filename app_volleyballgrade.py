@@ -220,50 +220,49 @@ def split_dataframe():
     try:
         data = request.get_json()
         raw_rows = data.get("raw_rows", [])
-        
         if not raw_rows:
             return jsonify({"status": "success", "processed_records": []})
-
-        df_raw = pd.DataFrame(raw_rows)
         
+        df_raw = pd.DataFrame(raw_rows)
         if len(df_raw.columns) >= 2:
             df_raw.columns = ['Timestamp', 'Transcript']
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
-
-        processed_dfs = []
         
-        for _, row in df_raw.iterrows():
-            ts = row['Timestamp']
-            txt = row['Transcript']
-            
-            if pd.isna(txt) or not str(txt).strip():
-                continue
-                
-            df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
-            processed_dfs.append(df_parsed)
-            
+        processed_dfs = []
+        import gc
+        
+        # Process in safe batches to prevent any potential resource exhaustion
+        batch_size = 5
+        rows_list = df_raw.to_dict(orient="records")
+        
+        for i in range(0, len(rows_list), batch_size):
+            batch = rows_list[i:i + batch_size]
+            for row in batch:
+                ts = row['Timestamp']
+                txt = row['Transcript']
+                if pd.isna(txt) or not str(txt).strip():
+                    continue
+                df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
+                processed_dfs.append(df_parsed)
+            gc.collect()
+
         if processed_dfs:
             df_new = pd.concat(processed_dfs, ignore_index=True)
         else:
             df_new = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
-
+            
         new_records = df_new.to_dict(orient="records")
-        
         existing_processed = cache.get('cached_processed') or []
         updated_processed = existing_processed + new_records
-        
         cache.set('cached_processed', updated_processed)
         
-        return jsonify({
-            "status": "success",
-            "processed_records": new_records
-        })
-
+        gc.collect()
+        return jsonify({"status": "success", "processed_records": new_records})
     except Exception as e:
         print(f"Error in split_dataframe route: {e}")
+        gc.collect()
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 @app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
