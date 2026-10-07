@@ -16,6 +16,7 @@ from google.genai import types
 import plotly.graph_objects as go
 import plotly.express as px
 
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
@@ -185,15 +186,15 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
             ),
         )
         
-        result = response.parsed
+        result = getattr(response, 'parsed', None)
         
         rows = []
-        if result and result.segments:
+        if result and getattr(result, 'segments', None):
             for seg in result.segments:
                 rows.append({
                     "Timestamp": timestamp,
-                    "Transcript": seg.text,
-                    "Score": seg.score
+                    "Transcript": getattr(seg, 'text', text),
+                    "Score": getattr(seg, 'score', 0)
                 })
         
         if not rows:
@@ -219,50 +220,49 @@ def split_dataframe():
     try:
         data = request.get_json()
         raw_rows = data.get("raw_rows", [])
-        
         if not raw_rows:
             return jsonify({"status": "success", "processed_records": []})
-
-        df_raw = pd.DataFrame(raw_rows)
         
+        df_raw = pd.DataFrame(raw_rows)
         if len(df_raw.columns) >= 2:
             df_raw.columns = ['Timestamp', 'Transcript']
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
-
-        processed_dfs = []
         
-        for _, row in df_raw.iterrows():
-            ts = row['Timestamp']
-            txt = row['Transcript']
-            
-            if pd.isna(txt) or not str(txt).strip():
-                continue
-                
-            df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
-            processed_dfs.append(df_parsed)
-            
+        processed_dfs = []
+        import gc
+        
+        # Process in safe batches to prevent any potential resource exhaustion
+        batch_size = 5
+        rows_list = df_raw.to_dict(orient="records")
+        
+        for i in range(0, len(rows_list), batch_size):
+            batch = rows_list[i:i + batch_size]
+            for row in batch:
+                ts = row['Timestamp']
+                txt = row['Transcript']
+                if pd.isna(txt) or not str(txt).strip():
+                    continue
+                df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
+                processed_dfs.append(df_parsed)
+            gc.collect()
+
         if processed_dfs:
             df_new = pd.concat(processed_dfs, ignore_index=True)
         else:
             df_new = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
-
+            
         new_records = df_new.to_dict(orient="records")
-        
         existing_processed = cache.get('cached_processed') or []
         updated_processed = existing_processed + new_records
-        
         cache.set('cached_processed', updated_processed)
         
-        return jsonify({
-            "status": "success",
-            "processed_records": new_records
-        })
-
+        gc.collect()
+        return jsonify({"status": "success", "processed_records": new_records})
     except Exception as e:
         print(f"Error in split_dataframe route: {e}")
+        gc.collect()
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 @app.route("/soccer-grade/process-audio", methods=["POST"])
 def process_audio():
@@ -387,6 +387,7 @@ def create_lineup():
     raw_session = cache.get('cached_raw') or []
     processed_session = cache.get('cached_processed') or []
     uploaded_session = cache.get('cached_uploaded') or []
+    selected_sport = cache.get('selected_sport') or ''
     selected_format = cache.get('selected_format') or ''
     blueprint_table = cache.get('cached_blueprint')
     
@@ -395,18 +396,28 @@ def create_lineup():
         raw_count=len(raw_session),
         processed_count=len(processed_session),
         uploaded_count=len(uploaded_session),
+        selected_sport=selected_sport,
         selected_format=selected_format,
         blueprint_table=blueprint_table
     )
 
+@app.route("/create-lineup/select-sport", methods=["POST"])
+def select_sport_sync():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    req_body = request.get_json()
+    if req_body and 'sport_type' in req_body:
+        cache.set('selected_sport', req_body['sport_type'])
+        return jsonify({"status": "sport_cached"})
+
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
-    if "user_id" not in session: 
+    if "user_id" not in session:
         return redirect(url_for("login"))
     req_body = request.get_json()
     if req_body and 'format_type' in req_body:
         cache.set('selected_format', req_body['format_type'])
-    return jsonify({"status": "format_cached"})
+        return jsonify({"status": "format_cached"})
 
 @app.route("/create-lineup/clear-blueprint", methods=["POST"])
 def clear_blueprint():
@@ -417,47 +428,120 @@ def clear_blueprint():
 
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
-    if "user_id" not in session: 
+    if "user_id" not in session:
         return redirect(url_for("login"))
-    if not client:
-        return jsonify({"status": "error", "message": "Mistral API client missing orchestration credentials."}), 500
+    if not API_KEY:
+        return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     
-    req_body = request.get_json()
-    format_type = req_body.get("format_type", "11v11")
+    req_body = request.get_json() or {}
+    sport = req_body.get("sport") or cache.get('selected_sport') or "Soccer"
+    format_type = req_body.get("format_type") or cache.get('selected_format') or "11v11"
+    
+    cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different soccer scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
+    positions_count = format_type[0] if format_type else "standard"
     
+    prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation. 
+Each item in the list must be an object with two keys: "Position" and "Description". 
+For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, and key technical skills based on all-time great players for that position. 
+Output ONLY a valid JSON array."""
+    
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "ministral-3b-2512",
+        "messages": [
+            {"role": "system", "content": "You are a lead sports data architect combining multi-scout evaluations. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary."},
+            {"role": "user", "content": prompt_instruction}
+        ],
+        "temperature": 0.2
+    }
+    
+    import time
+    api_response = None
+    for attempt in range(3):
+        try:
+            api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
+            if api_response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            break
+        except Exception as e:
+            if attempt == 2:
+                return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+            time.sleep(1 + attempt)
+            
+    if not api_response or api_response.status_code != 200:
+        err_msg = api_response.text if api_response else "No response received"
+        return jsonify({"status": "error", "message": f"Mistral API error: {err_msg}"}), 500
+        
     try:
-        response_stream = client.chat.complete(
-            model="ministral-3b-2512",
-            messages=[
-                {"role": "system", "content": "You are an advanced soccer tactics architect. Output requested data exclusively as clean JSON arrays."},
-                {"role": "user", "content": prompt_instruction}
-            ],
-            response_format={"type": "json_object"}
-        )
+        data = api_response.json()
+        raw_content = data['choices'][0]['message']['content'].strip()
         
-        raw_content = response_stream.choices[0].message.content.strip()
-        parsed_json = json.loads(raw_content)
+        # Clean markdown code blocks
+        if "```" in raw_content:
+            raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
+            raw_content = re.sub(r"\s*```$", "", raw_content)
+            raw_content = raw_content.strip()
+            
+        # Sanitize trailing commas before closing brackets or braces
+        raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
         
-        if isinstance(parsed_json, dict) and len(parsed_json.keys()) == 1:
-            key = list(parsed_json.keys())[0]
-            parsed_list = parsed_json[key]
-        else:
+        try:
+            parsed_json = json.loads(raw_content)
+        except json.JSONDecodeError as jde:
+            # Fallback regex extraction and comma repair for multi-line JSON blocks
+            match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
+            if match:
+                cleaned_match = match.group(1)
+                cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
+                # Fix missing commas between adjacent closing brace and opening brace/quote
+                cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
+                cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
+                try:
+                    parsed_json = json.loads(cleaned_match)
+                except Exception:
+                    # Final safety fallback: replace unescaped internal double quotes
+                    safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
+                    parsed_json = json.loads(safe_match)
+            else:
+                raise jde
+        
+        if isinstance(parsed_json, dict):
+            parsed_list = []
+            for k, v in parsed_json.items():
+                if isinstance(v, list):
+                    parsed_list.extend(v)
+                elif isinstance(v, dict):
+                    parsed_list.append(v)
+                else:
+                    parsed_list.append({"Position": k, "Description": str(v)})
+            if not parsed_list:
+                parsed_list = [parsed_json]
+        elif isinstance(parsed_json, list):
             parsed_list = parsed_json
+        else:
+            parsed_list = [{"Position": "Overview", "Description": str(parsed_json)}]
             
         df_output = pd.DataFrame(parsed_list)
         if len(df_output.columns) >= 2:
+            df_output = df_output.iloc[:, :2]
             df_output.columns = ['Position', 'Narrative Description Summary']
+            df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
+                lambda x: " ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
+            )
             
         html_table = df_output.to_html(classes='table', index=False)
         cache.set('cached_blueprint', html_table)
         
         return jsonify({"status": "success", "html_payload": html_table})
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
-
+        print(f"generate_tactics parsing error: {str(e)}")
+        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)} "}), 500
 
 @app.route("/analytics")
 def analytics():
@@ -543,7 +627,6 @@ def compute_metrics():
         except Exception:
             return "Error parsing system blueprint data frames.", 500
             
-    # Robust column normalization for uploaded CSV headers
     ideal_player_df.columns = [str(c).strip() for c in ideal_player_df.columns]
     
     pos_col = next((c for c in ideal_player_df.columns if c.lower() == 'position'), None)
@@ -591,7 +674,6 @@ def compute_metrics():
         player_indices = {p: i for i, p in enumerate(all_players)}
         position_indices = {pos: i + len(all_players) for i, pos in enumerate(all_positions)}
         
-        # Player-based color mapping with width scaled by recommendation score
         color_palette = px.colors.qualitative.Plotly * 3
         player_colors = {player: color_palette[i % len(color_palette)] for i, player in enumerate(all_players)}
         
@@ -614,7 +696,6 @@ def compute_metrics():
             
             sources.append(player_indices[player])
             targets.append(position_indices[pos])
-            # Scale flow thickness by confidence score
             values.append(score * 50)
             
             hex_color = player_colors.get(player, "#17a2b8").lstrip('#')
@@ -692,11 +773,11 @@ def compute_metrics():
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
 <html>
-<head><title>Soccer Grader Login</title></head>
+<head><title>Sports Grader Login</title></head>
 <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
     
     <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 300px; text-align: center;">
-        <h2>Soccer Grader Login</h2>
+        <h2>Sports Grader Login</h2>
         <form action="/login" method="POST">
             <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
             <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
@@ -1174,18 +1255,34 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     <h2>Line Up Builder Workspace</h2> 
     <p style="color:#666; text-align: center;">Select a configuration grid below to evaluate tactical alignment blueprints via Mistral AI.</p> 
     
-    <div class="placeholder-box"> 
-        <h3 style="color: #856404; margin: 0; font-size: 15px;">Canvas System Status</h3> 
-        <p style="color: #666; font-size: 13px; margin: 5px 0 0 0;">Visual drag-and-drop arranger components are actively staging.</p> 
-    </div> 
-    
-    <h3>1. Select Roster Matrix Format</h3> 
-    <div class="format-selector"> 
-        <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button> 
-        <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button> 
-        <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button> 
-    </div> 
-    
+    <h3>1. Select Sport</h3>
+    <div class="format-selector sport-selector">
+        <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
+        <button type="button" id="btn-basketball" class="btn-format {% if selected_sport == 'basketball' %}active{% endif %}" onclick="selectSport(this, 'basketball')">Basketball</button>
+        <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
+    </div>
+
+    <div id="matrix-format-container">
+        {% if selected_sport == 'soccer' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
+                <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
+            </div>
+        {% elif selected_sport == 'basketball' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-5x5" class="btn-format {% if selected_format == '5x5' %}active{% endif %}" onclick="selectFormat(this, '5x5')">5x5</button>
+            </div>
+        {% elif selected_sport == 'volleyball' %}
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-6x6" class="btn-format {% if selected_format == '6x6' %}active{% endif %}" onclick="selectFormat(this, '6x6')">6x6</button>
+            </div>
+        {% endif %}
+    </div>
+
     <div class="btn-group"> 
         <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()">Execute Blueprint Generation</button> 
         <button type="button" id="clear-btn" class="btn-clear-frame" onclick="clearBlueprintFrame()">Clear Frame</button> 
@@ -1211,15 +1308,60 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     </div> 
 </div> 
 <script> 
+let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
 let selectedFormatName = "{{ selected_format|safe }}"; 
 
+function selectSport(button, sportType) {
+    document.querySelectorAll('.sport-selector .btn-format').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    button.classList.add('active');
+    selectedSportName = sportType;
+
+    const container = document.getElementById('matrix-format-container');
+    container.innerHTML = '';
+
+    if (sportType === 'soccer') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-7v7" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-9v9" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
+                <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+            </div>
+        `;
+    } else if (sportType === 'basketball') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-5v5" class="btn-format" onclick="selectFormat(this, '5v5')">5v5</button>
+                <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
+            </div>
+        `;
+    } else if (sportType === 'volleyball') {
+        container.innerHTML = `
+            <h3>1. Select Roster Matrix Format</h3>
+            <div class="format-selector">
+                <button type="button" id="btn-6v6" class="btn-format" onclick="selectFormat(this, '6v6')">6v6</button>
+                <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
+            </div>
+        `;
+    }
+
+    fetch('/create-lineup/select-sport', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sport_type: sportType })
+    });
+}
+
 function selectFormat(clickedButton, formatValue) {
-    const buttons = document.querySelectorAll('.btn-format'); 
-    buttons.forEach(btn => btn.classList.remove('active')); 
+    const parentSelector = clickedButton.closest('.format-selector');
+    parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active')); 
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
     fetch('/create-lineup/select-format', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: formatValue }) }); 
-} 
+}
 
 async function runTacticalPrompt() {
     if (!selectedFormatName) return alert("Please choose a lineup layout metric variant layout format."); 
@@ -1230,7 +1372,11 @@ async function runTacticalPrompt() {
     spinner.style.display = "block"; 
     
     try {
-        const response = await fetch('/create-lineup/generate-tactics', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: selectedFormatName }) }); 
+        const response = await fetch('/create-lineup/generate-tactics', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ sport: selectedSportName, format_type: selectedFormatName }) 
+        }); 
         const data = await response.json(); 
         spinner.style.display = "none"; 
         runButton.disabled = false; 
@@ -1245,7 +1391,7 @@ async function runTacticalPrompt() {
         runButton.disabled = false; 
         responseAnchor.innerHTML = '<span style="color:var(--danger-color); font-weight:bold;">Network pipeline failure.</span>'; 
     } 
-} 
+}
 
 function clearBlueprintFrame() {
     fetch('/create-lineup/clear-blueprint', { method: 'POST' }) 
