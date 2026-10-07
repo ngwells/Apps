@@ -441,7 +441,9 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""Generate a JSON list of all positions for a {sport} team playing a {format_type} formation. 
+    positions_count = format_type[0] if format_type else "standard"
+    
+    prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation. 
 Each item in the list must be an object with two keys: "Position" and "Description". 
 For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, and key technical skills based on all-time great players for that position. 
 Output ONLY a valid JSON array."""
