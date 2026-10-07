@@ -1200,12 +1200,12 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         {% elif selected_sport == 'basketball' %}
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-3x2" class="btn-format {% if selected_format == '3x2' %}active{% endif %}" onclick="selectFormat(this, '3x2')">3x2</button>
+                <button type="button" id="btn-5x5" class="btn-format {% if selected_format == '5x5' %}active{% endif %}" onclick="selectFormat(this, '5x5')">5x5</button>
             </div>
         {% elif selected_sport == 'volleyball' %}
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-3x3" class="btn-format {% if selected_format == '3x3' %}active{% endif %}" onclick="selectFormat(this, '3x3')">3x3</button>
+                <button type="button" id="btn-6x6" class="btn-format {% if selected_format == '6x6' %}active{% endif %}" onclick="selectFormat(this, '6x6')">6x6</button>
             </div>
         {% endif %}
     </div>
