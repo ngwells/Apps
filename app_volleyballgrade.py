@@ -16,6 +16,7 @@ from google.genai import types
 import plotly.graph_objects as go
 import plotly.express as px
 
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
 
