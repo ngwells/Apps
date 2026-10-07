@@ -431,8 +431,8 @@ def clear_blueprint():
 def generate_tactics():
     if "user_id" not in session:
         return redirect(url_for("login"))
-    if not client:
-        return jsonify({"status": "error", "message": "Mistral API client missing orchestration credentials."}), 500
+    if not API_KEY:
+        return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     
     req_body = request.get_json() or {}
     sport = req_body.get("sport", "Soccer")
@@ -441,22 +441,35 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on the combined knowledge, give me the characteristics, traits, and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics, traits, and skills from all-time great players for that position. Do not include the players. You must generate every single position required for a {sport} {format_type} formation. Include left and right position if practical. Return a flat JSON array where each object has strictly two keys: "Position" and "Description"."""
+    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics and skills from all-time great players for that position. You must generate every single position required for a {sport} {format_type} formation. Return a valid JSON array of objects where each object has strictly two keys: "Position" and "Description"."""
+    
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "mistral-small-latest",
+        "messages": [
+            {"role": "system", "content": "You are a precise sports data architect. Output ONLY valid JSON representing a list of objects with 'Position' and 'Description' keys. No markdown blocks."},
+            {"role": "user", "content": prompt_instruction}
+        ],
+        "temperature": 0.2
+    }
     
     try:
-        response_stream = client.chat.complete(
-            model="ministral-3b-2512",
-            messages=[
-                {"role": "system", "content": "You are an advanced tactics architect. Output requested data exclusively as a flat JSON array of objects with 'Position' and 'Description' keys."},
-                {"role": "user", "content": prompt_instruction}
-            ],
-            response_format={"type": "json_object"}
-        )
+        api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
+        if api_response.status_code != 200:
+            return jsonify({"status": "error", "message": f"Mistral API error: {api_response.text}"}), 500
+            
+        data = api_response.json()
+        raw_content = data['choices'][0]['message']['content'].strip()
         
-        raw_content = response_stream.choices[0].message.content.strip()
+        if raw_content.startswith("```"):
+            raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
+            raw_content = re.sub(r"\s*```$", "", raw_content)
+            
         parsed_json = json.loads(raw_content)
         
-        # Unpack nested dictionaries or keys into a flat list of items
         if isinstance(parsed_json, dict):
             parsed_list = []
             for key, val in parsed_json.items():
@@ -472,12 +485,9 @@ def generate_tactics():
             parsed_list = parsed_json
             
         df_output = pd.DataFrame(parsed_list)
-        
-        # Ensure clean text representation and 2-column structure
         if len(df_output.columns) >= 2:
             df_output = df_output.iloc[:, :2]
             df_output.columns = ['Position', 'Narrative Description Summary']
-            # Convert any nested lists/objects in descriptions to clean text strings
             df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
                 lambda x: ", ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
             )
@@ -488,7 +498,6 @@ def generate_tactics():
         return jsonify({"status": "success", "html_payload": html_table})
     except Exception as e:
         return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
-
 
 @app.route("/analytics")
 def analytics():
