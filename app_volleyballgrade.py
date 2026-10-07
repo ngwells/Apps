@@ -440,18 +440,18 @@ def generate_tactics():
     sport = req_body.get("sport", "Soccer")
     format_type = req_body.get("format_type", "11v11")
     
-    # Cache both values if needed
+    # Cache both values
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    # Include both values in the prompt instruction
-    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics and skills from all-time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position..."""
+    # Instruct the prompt to output precisely two columns
+    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics and skills from all-time great players for that position. Output the result strictly as a JSON object containing an array of objects where each object has exactly two keys: "Position" and "Description"."""
     
     try:
         response_stream = client.chat.complete(
             model="ministral-3b-2512",
             messages=[
-                {"role": "system", "content": "You are an advanced tactics architect. Output requested data exclusively as clean JSON arrays."},
+                {"role": "system", "content": "You are an advanced tactics architect. Output requested data exclusively as clean JSON arrays with exactly two keys: Position and Description."},
                 {"role": "user", "content": prompt_instruction}
             ],
             response_format={"type": "json_object"}
@@ -467,7 +467,10 @@ def generate_tactics():
             parsed_list = parsed_json
             
         df_output = pd.DataFrame(parsed_list)
+        
+        # Ensure exactly 2 columns are mapped regardless of model output variations
         if len(df_output.columns) >= 2:
+            df_output = df_output.iloc[:, :2]
             df_output.columns = ['Position', 'Narrative Description Summary']
             
         html_table = df_output.to_html(classes='table', index=False)
