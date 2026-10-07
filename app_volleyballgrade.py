@@ -1260,14 +1260,16 @@ function selectSport(button, sportType) {
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-3x2" class="btn-format" onclick="selectFormat(this, '3x2')">3x2</button>
+                <button type="button" id="btn-5v5" class="btn-format" onclick="selectFormat(this, '5v5')">5v5</button>
+                <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
             </div>
         `;
     } else if (sportType === 'volleyball') {
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-3x3" class="btn-format" onclick="selectFormat(this, '3x3')">3x3</button>
+                <button type="button" id="btn-6v6" class="btn-format" onclick="selectFormat(this, '6v6')">6v6</button>
+                <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
             </div>
         `;
     }
