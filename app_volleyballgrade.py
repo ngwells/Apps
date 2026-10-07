@@ -186,15 +186,15 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
             ),
         )
         
-        result = response.parsed
+        result = getattr(response, 'parsed', None)
         
         rows = []
-        if result and result.segments:
+        if result and getattr(result, 'segments', None):
             for seg in result.segments:
                 rows.append({
                     "Timestamp": timestamp,
-                    "Transcript": seg.text,
-                    "Score": seg.score
+                    "Transcript": getattr(seg, 'text', text),
+                    "Score": getattr(seg, 'score', 0)
                 })
         
         if not rows:
