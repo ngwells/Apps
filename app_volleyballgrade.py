@@ -441,8 +441,9 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. You must generate every single position required for a {format_type} formation (all positions individually). Return a flat JSON array where each object has strictly two keys: "Position" and "Description"."""
+    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on the combined knowledge, give me the characteristics, traits, and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics, traits, and skills from all-time great players for that position. Do not include the players. You must generate every single position required for a {sport} {format_type} formation. Include left and right position if practical. Return a flat JSON array where each object has strictly two keys: "Position" and "Description"."""
     
+
     try:
         response_stream = client.chat.complete(
             model="ministral-3b-2512",
@@ -1244,6 +1245,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     </div> 
 </div> 
 <script> 
+let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
 let selectedFormatName = "{{ selected_format|safe }}"; 
 
 function selectSport(button, sportType) {
@@ -1251,6 +1253,7 @@ function selectSport(button, sportType) {
         btn.classList.remove('active');
     });
     button.classList.add('active');
+    selectedSportName = sportType;
 
     const container = document.getElementById('matrix-format-container');
     container.innerHTML = '';
@@ -1295,7 +1298,7 @@ function selectFormat(clickedButton, formatValue) {
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
     fetch('/create-lineup/select-format', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: formatValue }) }); 
-} 
+}
 
 async function runTacticalPrompt() {
     if (!selectedFormatName) return alert("Please choose a lineup layout metric variant layout format."); 
@@ -1306,7 +1309,11 @@ async function runTacticalPrompt() {
     spinner.style.display = "block"; 
     
     try {
-        const response = await fetch('/create-lineup/generate-tactics', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: selectedFormatName }) }); 
+        const response = await fetch('/create-lineup/generate-tactics', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ sport: selectedSportName, format_type: selectedFormatName }) 
+        }); 
         const data = await response.json(); 
         spinner.style.display = "none"; 
         runButton.disabled = false; 
@@ -1321,7 +1328,7 @@ async function runTacticalPrompt() {
         runButton.disabled = false; 
         responseAnchor.innerHTML = '<span style="color:var(--danger-color); font-weight:bold;">Network pipeline failure.</span>'; 
     } 
-} 
+}
 
 function clearBlueprintFrame() {
     fetch('/create-lineup/clear-blueprint', { method: 'POST' }) 
