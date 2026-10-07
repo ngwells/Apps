@@ -222,9 +222,16 @@ def split_dataframe():
                 print(f"JSON parsing error: {parse_err}")
 
         if parsed_segments:
-            default_ts = raw_rows[0].get('Timestamp', '') if raw_rows else ''
+            # Safely check if the first row is a dictionary or a string/list
+            first_row = raw_rows[0] if raw_rows else {}
+            if isinstance(first_row, dict):
+                default_ts = first_row.get('Timestamp', '')
+            elif isinstance(first_row, (list, tuple)) and len(first_row) > 0:
+                default_ts = str(first_row[0])
+            else:
+                default_ts = str(first_row)
+                
             for seg in parsed_segments:
-                # Handle both dict items and object attributes safely
                 if isinstance(seg, dict):
                     seg_text = seg.get('text', '')
                     seg_score = int(seg.get('score', 0))
