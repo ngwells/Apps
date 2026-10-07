@@ -441,7 +441,10 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""Generate a JSON list of all positions for a {sport} team playing a {format_type} formation. Each item in the list must be an object with two keys: "Position" and "Description". The Description should detail characteristics and skills based on all-time great players for that position. Output ONLY valid JSON array."""
+    prompt_instruction = f"""Generate a JSON list of all positions for a {sport} team playing a {format_type} formation. 
+Each item in the list must be an object with two keys: "Position" and "Description". 
+For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, and key technical skills based on all-time great players for that position. 
+Output ONLY a valid JSON array."""
     
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -450,10 +453,10 @@ def generate_tactics():
     payload = {
         "model": "ministral-3b-2512",
         "messages": [
-            {"role": "system", "content": "You are a sports data architect. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary."},
+            {"role": "system", "content": "You are a lead sports data architect combining multi-scout evaluations. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary."},
             {"role": "user", "content": prompt_instruction}
         ],
-        "temperature": 0.1
+        "temperature": 0.2
     }
     
     import time
@@ -484,17 +487,26 @@ def generate_tactics():
             raw_content = re.sub(r"\s*```$", "", raw_content)
             raw_content = raw_content.strip()
             
-        # Sanitize common LLM JSON syntax issues (trailing commas before closing brackets/braces)
+        # Sanitize trailing commas before closing brackets or braces
         raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
         
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as jde:
-            # Fallback extraction if outer text contains extra commentary
+            # Fallback regex extraction and comma repair for multi-line JSON blocks
             match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
             if match:
-                cleaned_match = re.sub(r',\s*([\]}])', r'\1', match.group(1))
-                parsed_json = json.loads(cleaned_match)
+                cleaned_match = match.group(1)
+                cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
+                # Fix missing commas between adjacent closing brace and opening brace/quote
+                cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
+                cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
+                try:
+                    parsed_json = json.loads(cleaned_match)
+                except Exception:
+                    # Final safety fallback: replace unescaped internal double quotes
+                    safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
+                    parsed_json = json.loads(safe_match)
             else:
                 raise jde
         
@@ -519,7 +531,7 @@ def generate_tactics():
             df_output = df_output.iloc[:, :2]
             df_output.columns = ['Position', 'Narrative Description Summary']
             df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
-                lambda x: ", ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
+                lambda x: " ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
             )
             
         html_table = df_output.to_html(classes='table', index=False)
@@ -528,7 +540,7 @@ def generate_tactics():
         return jsonify({"status": "success", "html_payload": html_table})
     except Exception as e:
         print(f"generate_tactics parsing error: {str(e)}")
-        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)} "}), 500
 
 @app.route("/analytics")
 def analytics():
