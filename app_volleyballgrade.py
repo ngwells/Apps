@@ -435,54 +435,71 @@ def generate_tactics():
         return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     
     req_body = request.get_json() or {}
-    sport = req_body.get("sport", "Soccer")
-    format_type = req_body.get("format_type", "11v11")
+    sport = req_body.get("sport") or cache.get('selected_sport') or "Soccer"
+    format_type = req_body.get("format_type") or cache.get('selected_format') or "11v11"
     
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics and skills from all-time great players for that position. You must generate every single position required for a {sport} {format_type} formation. Return a valid JSON array of objects where each object has strictly two keys: "Position" and "Description"."""
+    prompt_instruction = f"""Generate a JSON list of all positions for a {sport} team playing a {format_type} formation. Each item in the list must be an object with two keys: "Position" and "Description". The Description should detail characteristics and skills based on all-time great players for that position. Output ONLY valid JSON array."""
     
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "mistral-small-latest",
+        "model": "ministral-3b-2512",
         "messages": [
-            {"role": "system", "content": "You are a precise sports data architect. Output ONLY valid JSON representing a list of objects with 'Position' and 'Description' keys. No markdown blocks."},
+            {"role": "system", "content": "You are a sports data architect. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary."},
             {"role": "user", "content": prompt_instruction}
         ],
-        "temperature": 0.2
+        "temperature": 0.1
     }
     
-    try:
-        api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
-        if api_response.status_code != 200:
-            return jsonify({"status": "error", "message": f"Mistral API error: {api_response.text}"}), 500
+    import time
+    api_response = None
+    for attempt in range(3):
+        try:
+            api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
+            if api_response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            break
+        except Exception as e:
+            if attempt == 2:
+                return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+            time.sleep(1 + attempt)
             
+    if not api_response or api_response.status_code != 200:
+        err_msg = api_response.text if api_response else "No response received"
+        return jsonify({"status": "error", "message": f"Mistral API error: {err_msg}"}), 500
+        
+    try:
         data = api_response.json()
         raw_content = data['choices'][0]['message']['content'].strip()
         
-        if raw_content.startswith("```"):
+        if "```" in raw_content:
             raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
             raw_content = re.sub(r"\s*```$", "", raw_content)
+            raw_content = raw_content.strip()
             
         parsed_json = json.loads(raw_content)
         
         if isinstance(parsed_json, dict):
             parsed_list = []
-            for key, val in parsed_json.items():
-                if isinstance(val, list):
-                    parsed_list.extend(val)
-                elif isinstance(val, dict):
-                    parsed_list.append(val)
+            for k, v in parsed_json.items():
+                if isinstance(v, list):
+                    parsed_list.extend(v)
+                elif isinstance(v, dict):
+                    parsed_list.append(v)
                 else:
-                    parsed_list.append({"Position": key, "Description": str(val)})
+                    parsed_list.append({"Position": k, "Description": str(v)})
             if not parsed_list:
                 parsed_list = [parsed_json]
-        else:
+        elif isinstance(parsed_json, list):
             parsed_list = parsed_json
+        else:
+            parsed_list = [{"Position": "Overview", "Description": str(parsed_json)}]
             
         df_output = pd.DataFrame(parsed_list)
         if len(df_output.columns) >= 2:
@@ -497,6 +514,7 @@ def generate_tactics():
         
         return jsonify({"status": "success", "html_payload": html_table})
     except Exception as e:
+        print(f"generate_tactics parsing error: {str(e)}")
         return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
 
 @app.route("/analytics")
