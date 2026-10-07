@@ -199,21 +199,33 @@ def split_dataframe():
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=TranscriptLog,
+                response_schema=TranscriptLog.model_json_schema(), # Fixed: pass JSON schema dict
                 temperature=0.1,
             ),
         )
         
-        result = getattr(response, 'parsed', None)
         rows = []
+        result = getattr(response, 'parsed', None)
         
+        # If response.parsed isn't populated directly by the SDK with structured output, 
+        # try loading the raw text response safely as JSON fallback:
+        if not result and getattr(response, 'text', None):
+            try:
+                parsed_dict = json.loads(response.text)
+                if "segments" in parsed_dict:
+                    result = type('Obj', (object,), {
+                        'segments': [type('Seg', (object,), s) for s in parsed_dict['segments']]
+                    })()
+            except Exception as parse_err:
+                print(f"Manual JSON fallback parse error: {parse_err}")
+
         if result and getattr(result, 'segments', None):
             default_ts = raw_rows[0].get('Timestamp', '') if raw_rows else ''
             for seg in result.segments:
                 rows.append({
                     "Timestamp": default_ts,
-                    "Transcript": getattr(seg, 'text', ''),
-                    "Score": getattr(seg, 'score', 0)
+                    "Transcript": getattr(seg, 'text', str(seg)),
+                    "Score": int(getattr(seg, 'score', 0))
                 })
         
         # Fallback if model parsing returns empty
@@ -233,7 +245,10 @@ def split_dataframe():
         
         gc.collect()
         return jsonify({"status": "success", "processed_records": new_records})
+        
     except Exception as e:
+        import traceback
+        traceback.print_exc() # Prints exact line number and error to server terminal
         print(f"Error in split_dataframe batch route: {e}")
         gc.collect()
         return jsonify({"status": "error", "message": str(e)}), 500
