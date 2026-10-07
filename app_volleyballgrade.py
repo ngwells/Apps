@@ -177,7 +177,7 @@ def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
     """
     
     # Randomly select between two models to balance quota usage
-    chosen_model = random.choice(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', gemini-2.5-flash-lite])
+    chosen_model = random.choice(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite'])
     
     try:
         response = client2.models.generate_content(
