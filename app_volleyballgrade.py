@@ -162,61 +162,6 @@ class TranscriptLog(BaseModel):
 
 import random
 
-def parse_transcript_to_dataframe(timestamp: str, text: str) -> pd.DataFrame:
-    prompt = f"""
-    Analyze the following transcript text, break it down into natural segments/sentences, and for each segment:
-    1. Extract the raw segment text.
-       - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
-       - If there is no subject and just a trait - determine if there was a pause and its part of the previous line.
-    2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
-       - Score 51 to 100 by integers: Directly evaluates an individual player (e.g., "Player 17 doing great",  "Player C135 is very fast and never stops moving"). The segment has a subject and traits/qualities/descriptions/characteristics. Quantify how specific the transcript is towards the subject, player.
-       - Lower scores / 0: General instructions ("redo the drill"), noise, or sequences of events involving multiple players (e.g., "Player 17 passed to Player 18 and was stopped by Player 20"). 
-       - IF you are just describing what you're seeing in sequence, then this is a low score.
-       
-    Transcript: "{text}"
-    """
-    
-    # Randomly select between two models to balance quota usage
-    chosen_model = random.choice(['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite'])
-    
-    try:
-        response = client2.models.generate_content(
-            model=chosen_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=TranscriptLog,
-                temperature=0.1,
-            ),
-        )
-        
-        result = getattr(response, 'parsed', None)
-        rows = []
-        if result and getattr(result, 'segments', None):
-            for seg in result.segments:
-                rows.append({
-                    "Timestamp": timestamp,
-                    "Transcript": getattr(seg, 'text', text),
-                    "Score": getattr(seg, 'score', 0)
-                })
-        
-        if not rows:
-            rows.append({
-                "Timestamp": timestamp,
-                "Transcript": text,
-                "Score": 0
-            })
-            
-        return pd.DataFrame(rows)
-
-    except Exception as e:
-        print(f"Error calling Gemini API ({chosen_model}) for transcript parsing: {e}")
-        return pd.DataFrame([{
-            "Timestamp": timestamp,
-            "Transcript": text,
-            "Score": 0
-        }])
-
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
     try:
@@ -231,29 +176,55 @@ def split_dataframe():
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
         
-        processed_dfs = []
-        import gc
+        # Format all transcripts into a single structured payload for 1 single API call
+        transcript_batch_str = "\n".join([f"[{row['Timestamp']}] {row['Transcript']}" for _, row in df_raw.iterrows()])
         
-        # Process in safe batches to prevent any potential resource exhaustion
-        batch_size = 5
-        rows_list = df_raw.to_dict(orient="records")
+        prompt = f"""
+        Analyze the following batch of timestamped transcript texts, break each down into natural segments/sentences, and for each segment:
+        1. Extract the raw segment text, preserving its timestamp context.
+           - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
+        2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
+           - Score 51 to 100 by integers: Directly evaluates an individual player.
+           - Lower scores / 0: General instructions, noise, or multi-player sequences.
+           
+        Batch Transcripts:
+        {transcript_batch_str}
+        """
         
-        for i in range(0, len(rows_list), batch_size):
-            batch = rows_list[i:i + batch_size]
-            for row in batch:
-                ts = row['Timestamp']
-                txt = row['Transcript']
-                if pd.isna(txt) or not str(txt).strip():
-                    continue
-                df_parsed = parse_transcript_to_dataframe(str(ts), str(txt))
-                processed_dfs.append(df_parsed)
-            gc.collect()
-
-        if processed_dfs:
-            df_new = pd.concat(processed_dfs, ignore_index=True)
-        else:
-            df_new = pd.DataFrame(columns=["Timestamp", "Transcript", "Score"])
-            
+        chosen_model = random.choice(['gemini-3.5-flash-lite','gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'])
+        
+        response = client2.models.generate_content(
+            model=chosen_model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=TranscriptLog,
+                temperature=0.1,
+            ),
+        )
+        
+        result = getattr(response, 'parsed', None)
+        rows = []
+        
+        if result and getattr(result, 'segments', None):
+            default_ts = raw_rows[0].get('Timestamp', '') if raw_rows else ''
+            for seg in result.segments:
+                rows.append({
+                    "Timestamp": default_ts,
+                    "Transcript": getattr(seg, 'text', ''),
+                    "Score": getattr(seg, 'score', 0)
+                })
+        
+        # Fallback if model parsing returns empty
+        if not rows:
+            for _, row in df_raw.iterrows():
+                rows.append({
+                    "Timestamp": row['Timestamp'],
+                    "Transcript": row['Transcript'],
+                    "Score": 0
+                })
+                
+        df_new = pd.DataFrame(rows)
         new_records = df_new.to_dict(orient="records")
         existing_processed = cache.get('cached_processed') or []
         updated_processed = existing_processed + new_records
@@ -262,7 +233,7 @@ def split_dataframe():
         gc.collect()
         return jsonify({"status": "success", "processed_records": new_records})
     except Exception as e:
-        print(f"Error in split_dataframe route: {e}")
+        print(f"Error in split_dataframe batch route: {e}")
         gc.collect()
         return jsonify({"status": "error", "message": str(e)}), 500
 
