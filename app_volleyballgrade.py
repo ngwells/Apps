@@ -410,6 +410,15 @@ def select_sport_sync():
     if req_body and 'sport_type' in req_body:
         cache.set('selected_sport', req_body['sport_type'])
     return jsonify({"status": "sport_cached"})
+    
+@app.route("/create-lineup/select-sport", methods=["POST"])
+def select_sport_sync():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    req_body = request.get_json()
+    if req_body and 'sport_type' in req_body:
+        cache.set('selected_sport', req_body['sport_type'])
+        return jsonify({"status": "sport_cached"})
 
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
@@ -429,16 +438,23 @@ def clear_blueprint():
 
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
-    if "user_id" not in session: 
+    if "user_id" not in session:
         return redirect(url_for("login"))
     if not client:
         return jsonify({"status": "error", "message": "Mistral API client missing orchestration credentials."}), 500
     
-    req_body = request.get_json()
+    req_body = request.get_json() or {}
+    
+    # Retrieve sport and format_type values sent from the buttons/frontend
+    sport = req_body.get("sport", "Soccer")
     format_type = req_body.get("format_type", "11v11")
+    
+    # Cache both values if needed
+    cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, Give me the characteristics and skills required for a player for each position in {format_type} line up. sperate each position and use the characteristics and skills from all the all time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position. CRITICAL OUTPUT RULE: Return ONLY a valid JSON format list of objects representing this dataframe array. No extra commentary prose text. make sure the columns are labeled 'Position' and 'Description'. Format Example: [{{"Position": "Goalkeeper (GK)", "Description": "Exceptional shot-stopping reflexes..."}} ]"""
+    # Include both values in the prompt instruction
+    prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on your knowledge, give me the characteristics and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics and skills from all-time great players for that position. Create a data frame with one column being position and the other column being a narrative description of the characteristics and skills for that position..."""
     
     try:
         response_stream = client.chat.complete(
