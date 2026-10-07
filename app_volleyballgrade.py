@@ -404,15 +404,6 @@ def create_lineup():
 
 @app.route("/create-lineup/select-sport", methods=["POST"])
 def select_sport_sync():
-    if "user_id" not in session: 
-        return redirect(url_for("login"))
-    req_body = request.get_json()
-    if req_body and 'sport_type' in req_body:
-        cache.set('selected_sport', req_body['sport_type'])
-    return jsonify({"status": "sport_cached"})
-    
-@app.route("/create-lineup/select-sport", methods=["POST"])
-def select_sport_sync():
     if "user_id" not in session:
         return redirect(url_for("login"))
     req_body = request.get_json()
@@ -422,12 +413,12 @@ def select_sport_sync():
 
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
-    if "user_id" not in session: 
+    if "user_id" not in session:
         return redirect(url_for("login"))
     req_body = request.get_json()
     if req_body and 'format_type' in req_body:
         cache.set('selected_format', req_body['format_type'])
-    return jsonify({"status": "format_cached"})
+        return jsonify({"status": "format_cached"})
 
 @app.route("/create-lineup/clear-blueprint", methods=["POST"])
 def clear_blueprint():
