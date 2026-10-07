@@ -443,7 +443,6 @@ def generate_tactics():
     
     prompt_instruction = f"""You are 5 different scouts with various opinions that need to select players for positions on a team. Based on the combined knowledge, give me the characteristics, traits, and skills required for a player for each position in a {sport} team playing a {format_type} lineup. Separate each position and use the characteristics, traits, and skills from all-time great players for that position. Do not include the players. You must generate every single position required for a {sport} {format_type} formation. Include left and right position if practical. Return a flat JSON array where each object has strictly two keys: "Position" and "Description"."""
     
-
     try:
         response_stream = client.chat.complete(
             model="ministral-3b-2512",
@@ -457,20 +456,31 @@ def generate_tactics():
         raw_content = response_stream.choices[0].message.content.strip()
         parsed_json = json.loads(raw_content)
         
+        # Unpack nested dictionaries or keys into a flat list of items
         if isinstance(parsed_json, dict):
+            parsed_list = []
             for key, val in parsed_json.items():
                 if isinstance(val, list):
-                    parsed_list = val
-                    break
-            else:
+                    parsed_list.extend(val)
+                elif isinstance(val, dict):
+                    parsed_list.append(val)
+                else:
+                    parsed_list.append({"Position": key, "Description": str(val)})
+            if not parsed_list:
                 parsed_list = [parsed_json]
         else:
             parsed_list = parsed_json
             
         df_output = pd.DataFrame(parsed_list)
+        
+        # Ensure clean text representation and 2-column structure
         if len(df_output.columns) >= 2:
             df_output = df_output.iloc[:, :2]
             df_output.columns = ['Position', 'Narrative Description Summary']
+            # Convert any nested lists/objects in descriptions to clean text strings
+            df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
+                lambda x: ", ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
+            )
             
         html_table = df_output.to_html(classes='table', index=False)
         cache.set('cached_blueprint', html_table)
