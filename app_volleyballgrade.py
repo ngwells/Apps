@@ -194,16 +194,26 @@ def split_dataframe():
         {transcript_batch_str}
         """
         
-        chosen_model = random.choice(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
+        model_options = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash']
+        random.shuffle(model_options)
         
-        response = client2.models.generate_content(
-            model=chosen_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
+        response = None
+        for chosen_model in model_options:
+            try:
+                print(f"Attempting model: {chosen_model}")
+                response = client2.models.generate_content(
+                    model=chosen_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                    ),
+                )
+                if response and getattr(response, 'text', None):
+                    break
+            except Exception as model_err:
+                print(f"Model {chosen_model} failed/unavailable: {model_err}")
+                continue
         
         rows = []
         parsed_segments = []
