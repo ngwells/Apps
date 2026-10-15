@@ -1,4 +1,4 @@
-import datetime, io, json, math, os, re, base64, random
+import datetime, io, json, math, os, re, base64, random, secrets, hashlib
 from flask import Flask, jsonify, request, render_template_string, session, redirect, url_for
 from flask_caching import Cache
 from mistralai.client import Mistral
@@ -20,7 +20,6 @@ import gc
 # Google Gmail API imports
 from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
@@ -75,8 +74,65 @@ class OTPCode(db.Model):
     code = db.Column(db.String(6), nullable=False)
     expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
 
+# --- Remember Token Model ---
+class RememberToken(db.Model):
+    __tablename__ = 'remember_tokens'
+    id = db.Column(db.String, primary_key=True, server_default=db.text("gen_random_uuid()"))
+    user_id = db.Column(db.String, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    token_hash = db.Column(db.String(256), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+
 with app.app_context():
     db.create_all()
+
+
+# --- Device Token Helpers ---
+def is_device_remembered(user_id):
+    """Checks if incoming request has a valid, unexpired remember_device cookie."""
+    cookie_token = request.cookies.get("remember_device")
+    if not cookie_token:
+        return False
+
+    hashed_cookie = hashlib.sha256(cookie_token.encode('utf-8')).hexdigest()
+    token_entry = RememberToken.query.filter_by(token_hash=hashed_cookie, user_id=str(user_id)).first()
+
+    if not token_entry:
+        return False
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires_at = token_entry.expires_at if token_entry.expires_at.tzinfo else token_entry.expires_at.replace(tzinfo=datetime.timezone.utc)
+
+    if expires_at.timestamp() < now.timestamp():
+        db.session.delete(token_entry)
+        db.session.commit()
+        return False
+
+    return True
+
+def create_remember_cookie(response, user_id):
+    """Generates a secure token, saves its hash to DB, and attaches HTTP-only cookie."""
+    raw_token = secrets.token_hex(32)
+    token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+
+    new_token = RememberToken(
+        user_id=str(user_id),
+        token_hash=token_hash,
+        expires_at=expires_at
+    )
+    db.session.add(new_token)
+    db.session.commit()
+
+    response.set_cookie(
+        "remember_device",
+        raw_token,
+        max_age=30 * 24 * 60 * 60,
+        httponly=True,
+        samesite="Lax",
+        secure=True
+    )
+    return response
 
 
 # --- Gmail API Email Dispatcher ---
@@ -135,7 +191,6 @@ def send_2fa_otp(email):
     otp_code = f"{random.randint(100000, 999999)}"
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
     
-    # Upsert OTP into database table
     existing_otp = OTPCode.query.get(email.lower())
     if existing_otp:
         existing_otp.code = otp_code
@@ -164,6 +219,16 @@ def login():
             
         user = User.query.filter_by(email=email).first()
         if user and check_password_hash(user.password, password):
+            # Check if device token cookie is valid and skip 2FA
+            if is_device_remembered(user.id):
+                user.times_logged_in = (user.times_logged_in or 0) + 1
+                user.last_log_in = datetime.datetime.now(datetime.timezone.utc)
+                db.session.commit()
+
+                session["user_id"] = str(user.id)
+                return redirect(url_for("index"))
+
+            # Otherwise proceed with 2FA dispatch
             session["pending_email"] = user.email
             try:
                 send_2fa_otp(user.email)
@@ -222,19 +287,18 @@ def verify_2fa():
         
     if request.method == "POST":
         entered_code = request.form.get("otp_code", "").strip()
+        remember_me = request.form.get("remember_device") == "on"
         otp_record = OTPCode.query.get(pending_email)
         
         now = datetime.datetime.now(datetime.timezone.utc)
         if not otp_record or otp_record.code != entered_code:
             return "Invalid 2FA Code. <a href='/verify-2fa'>Try again</a>", 400
             
-        # Ensure UTC timezone alignment for safe comparison
         if otp_record.expires_at.tzinfo is None:
             expires_at = otp_record.expires_at.replace(tzinfo=datetime.timezone.utc)
         else:
             expires_at = otp_record.expires_at
             
-        # Compare via floating-point Unix timestamps
         if expires_at.timestamp() < now.timestamp():
             return "Expired 2FA Code. <a href='/login'>Request a new one</a>", 400
             
@@ -247,8 +311,13 @@ def verify_2fa():
             db.session.commit()
             
             session.pop("pending_email", None)
-            session["user_id"] = user.id
-            return redirect(url_for("index"))
+            session["user_id"] = str(user.id)
+            
+            response = redirect(url_for("index"))
+            if remember_me:
+                response = create_remember_cookie(response, user.id)
+
+            return response
             
     return render_template_string(VERIFY_2FA_PAGE_HTML, email=pending_email)
 
@@ -998,6 +1067,12 @@ VERIFY_2FA_PAGE_HTML = """
         <p style="font-size: 13px; color: #555;">We sent a 6-digit code from <strong>contact@evalbricks.com</strong> to {{ email }}.</p>
         <form action="/verify-2fa" method="POST">
             <input type="text" name="otp_code" placeholder="000000" maxlength="6" pattern="\\d{6}" required style="width: 100%; padding: 12px; margin: 10px 0; font-size: 20px; letter-spacing: 5px; text-align: center; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"><br>
+            
+            <div style="text-align: left; margin: 10px 0; font-size: 13px; color: #555;">
+                <input type="checkbox" name="remember_device" id="remember_device" checked>
+                <label for="remember_device">Remember this device for 30 days</label>
+            </div>
+
             <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; font-weight: bold;">Verify & Continue</button>
         </form>
         <p style="font-size: 12px; margin-top: 15px;"><a href="/login" style="color: #666;">Cancel and return to login</a></p>
