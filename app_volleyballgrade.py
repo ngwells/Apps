@@ -1,4 +1,4 @@
-import datetime, io, json, math, os, re, base64
+import datetime, io, json, math, os, re, base64, random
 from flask import Flask, jsonify, request, render_template_string, session, redirect, url_for
 from flask_caching import Cache
 from mistralai.client import Mistral
@@ -17,6 +17,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 import gc
 
+# Google Gmail API imports
+from email.mime.text import MIMEText
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "soccer-grade-secret-automation-key")
@@ -49,14 +55,99 @@ client2 = genai.Client(api_key=API_KEY2) if API_KEY2 else None
 
 # --- User Model ---
 class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    first_name = db.Column(db.String(50))
-    last_name = db.Column(db.String(50))
+    __tablename__ = 'user'
+    id = db.Column(db.String, primary_key=True, server_default=db.text("gen_random_uuid()"))
+    first_name = db.Column(db.String(50), nullable=False)
+    last_name = db.Column(db.String(50), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(256), nullable=False)
+    agreement = db.Column(db.Boolean, default=False, nullable=False)
+    paid = db.Column(db.Boolean, default=False, nullable=False)
+    verified = db.Column(db.Boolean, default=False, nullable=False)
+    times_logged_in = db.Column(db.Integer, default=0, nullable=False)
+    last_log_in = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
+
+# --- OTP Helper Store Model ---
+class OTPCode(db.Model):
+    __tablename__ = 'otp_codes'
+    email = db.Column(db.String(120), primary_key=True)
+    code = db.Column(db.String(6), nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
 
 with app.app_context():
     db.create_all()
+
+
+# --- Gmail API Email Dispatcher ---
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+
+def get_gmail_service():
+    """Retrieves or refreshes Gmail API credentials using environment variables."""
+    refresh_token = os.environ.get("GMAIL_REFRESH_TOKEN")
+    client_id = os.environ.get("GMAIL_CLIENT_ID")
+    client_secret = os.environ.get("GMAIL_CLIENT_SECRET")
+
+    if not all([refresh_token, client_id, client_secret]):
+        raise ValueError("Missing Gmail OAuth environment variables in Render configuration.")
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=GMAIL_SCOPES
+    )
+    
+    # Automatically requests a fresh short-lived Access Token
+    creds.refresh(Request())
+    return build('gmail', 'v1', credentials=creds)
+
+def send_gmail_otp(to_email, otp_code):
+    """Sends 2FA OTP email using Gmail API from contact@evalbricks.com."""
+    try:
+        service = get_gmail_service()
+        
+        html_content = f"""
+        <html>
+            <body style="font-family: sans-serif; padding: 20px;">
+                <h2>Security Verification</h2>
+                <p>Your 2FA verification code is:</p>
+                <h1 style="letter-spacing: 5px; color: #2563eb;">{otp_code}</h1>
+                <p>This code will expire in 10 minutes.</p>
+            </body>
+        </html>
+        """
+        
+        message = MIMEText(html_content, 'html')
+        message['to'] = to_email
+        message['from'] = 'contact@evalbricks.com'
+        message['subject'] = 'Your 2FA Verification Code'
+        
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+        service.users().messages().send(userId='me', body={'raw': raw_message}).execute()
+    except Exception as e:
+        print(f"Gmail API Error sending email: {e}")
+        raise e
+
+def send_2fa_otp(email):
+    """Generates 6-digit OTP, updates database, and dispatches email via Gmail API."""
+    otp_code = f"{random.randint(100000, 999999)}"
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
+    
+    # Upsert OTP into database table
+    existing_otp = OTPCode.query.get(email.lower())
+    if existing_otp:
+        existing_otp.code = otp_code
+        existing_otp.expires_at = expires_at
+    else:
+        new_otp = OTPCode(email=email.lower(), code=otp_code, expires_at=expires_at)
+        db.session.add(new_otp)
+    db.session.commit()
+
+    send_gmail_otp(email, otp_code)
+
 
 # --- Auth Routes ---
 def is_valid_email(email):
@@ -66,41 +157,107 @@ def is_valid_email(email):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        email = request.form.get("email")
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password")
+        
         if not is_valid_email(email):
             return "Please enter a valid email address. <a href='/login'>Try again</a>", 400
             
         user = User.query.filter_by(email=email).first()
-        if user and check_password_hash(user.password, request.form.get("password")):
-            session["user_id"] = user.id
-            return redirect(url_for("index"))
+        if user and check_password_hash(user.password, password):
+            session["pending_email"] = user.email
+            try:
+                send_2fa_otp(user.email)
+            except Exception:
+                return "Failed to send 2FA email. Please check server Gmail configuration.", 500
+            return redirect(url_for("verify_2fa"))
             
-        return "Invalid credentials. <a href='/login'>Try again</a>"
+        return "Invalid credentials. <a href='/login'>Try again</a>", 400
     return render_template_string(LOGIN_PAGE_HTML)
 
 @app.route("/register", methods=["POST"])
 def register():
-    email = request.form.get("email")
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    agreement = True if request.form.get("agreement") == "on" else False
+
     if not is_valid_email(email):
-         return "Invalid email format. Please go back and try again.", 400
+        return "Invalid email format. Please go back and try again.", 400
+    if len(password) < 8:
+        return "Password must be at least 8 characters long. <a href='/login'>Try again</a>", 400
+    if not agreement:
+        return "You must agree to the Terms of Service. <a href='/login'>Try again</a>", 400
          
     if User.query.filter_by(email=email).first():
-         return "Email already registered. <a href='/login'>Go to login</a>", 400
+        return "Email already registered. <a href='/login'>Go to login</a>", 400
 
-    hashed_pw = generate_password_hash(request.form.get("password"))
+    hashed_pw = generate_password_hash(password)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    
     new_user = User(
         first_name=request.form.get("first_name"),
         last_name=request.form.get("last_name"),
         email=email,
-        password=hashed_pw
+        password=hashed_pw,
+        agreement=True,
+        paid=False,
+        verified=False,
+        times_logged_in=0,
+        last_log_in=now
     )
     db.session.add(new_user)
     db.session.commit()
+    
+    session["pending_email"] = email
+    try:
+        send_2fa_otp(email)
+    except Exception:
+        return "Account created, but failed to dispatch 2FA email.", 500
+    return redirect(url_for("verify_2fa"))
+
+@app.route("/verify-2fa", methods=["GET", "POST"])
+def verify_2fa():
+    pending_email = session.get("pending_email")
+    if not pending_email:
+        return redirect(url_for("login"))
+        
+    if request.method == "POST":
+        entered_code = request.form.get("otp_code", "").strip()
+        otp_record = OTPCode.query.get(pending_email)
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not otp_record or otp_record.code != entered_code:
+            return "Invalid 2FA Code. <a href='/verify-2fa'>Try again</a>", 400
+            
+        expires_at = otp_record.expires_at.replace(tzinfo=datetime.timezone.utc) if otp_record.expires_at.tzinfo is None else otp_record.expires_at
+            
+        if expires_at < now:
+            return "Expired 2FA Code. <a href='/login'>Request a new one</a>", 400
+            
+        # Update user status to verified (1), increment times_logged_in, set last_log_in
+        user = User.query.filter_by(email=pending_email).first()
+        if user:
+            user.verified = True
+            user.times_logged_in = (user.times_logged_in or 0) + 1
+            user.last_log_in = now
+            db.session.delete(otp_record)
+            db.session.commit()
+            
+            session.pop("pending_email", None)
+            session["user_id"] = user.id
+            return redirect(url_for("index"))
+            
+    return render_template_string(VERIFY_2FA_PAGE_HTML, email=pending_email)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    cache.clear()
     return redirect(url_for("login"))
 
 @app.route("/reset-password", methods=["POST"])
 def reset_password():
-    email = request.form.get("email")
+    email = request.form.get("email", "").strip().lower()
     new_password = request.form.get("new_password")
     
     if not email or not new_password:
@@ -115,6 +272,7 @@ def reset_password():
         return "Password updated successfully! You can now <a href='/login'>log in</a>."
     else:
         return "Email not found. <a href='/login'>Try again</a>", 404
+
 
 # --- Protected Routes ---
 @app.route("/")
@@ -161,8 +319,6 @@ class TranscriptSegment(BaseModel):
 class TranscriptLog(BaseModel):
     segments: list[TranscriptSegment] = Field(description="List of segmented text chunks extracted from the transcript with their evaluation scores.")
 
-import random
-
 @app.route("/soccer-grade/split-dataframe", methods=["POST"])
 def split_dataframe():
     try:
@@ -177,7 +333,6 @@ def split_dataframe():
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
         
-        # Format all transcripts into a single structured payload for 1 single API call
         transcript_batch_str = "\n".join([f"[{row['Timestamp']}] {row['Transcript']}" for _, row in df_raw.iterrows()])
         
         prompt = f"""
@@ -232,7 +387,6 @@ def split_dataframe():
                 print(f"JSON parsing error: {parse_err}")
 
         if parsed_segments:
-            # Safely check if the first row is a dictionary or a string/list
             first_row = raw_rows[0] if raw_rows else {}
             if isinstance(first_row, dict):
                 default_ts = first_row.get('Timestamp', '')
@@ -255,7 +409,6 @@ def split_dataframe():
                     "Score": seg_score
                 })
         
-        # Fallback if model parsing returns empty
         if not rows:
             for _, row in df_raw.iterrows():
                 rows.append({
@@ -497,30 +650,25 @@ Output ONLY a valid JSON array."""
         data = api_response.json()
         raw_content = data['choices'][0]['message']['content'].strip()
         
-        # Clean markdown code blocks
         if "```" in raw_content:
             raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
             raw_content = re.sub(r"\s*```$", "", raw_content)
             raw_content = raw_content.strip()
             
-        # Sanitize trailing commas before closing brackets or braces
         raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
         
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as jde:
-            # Fallback regex extraction and comma repair for multi-line JSON blocks
             match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
             if match:
                 cleaned_match = match.group(1)
                 cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
-                # Fix missing commas between adjacent closing brace and opening brace/quote
                 cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
                 cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
                 try:
                     parsed_json = json.loads(cleaned_match)
                 except Exception:
-                    # Final safety fallback: replace unescaped internal double quotes
                     safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
                     parsed_json = json.loads(safe_match)
             else:
@@ -791,11 +939,11 @@ LOGIN_PAGE_HTML = """
 <head><title>Sports Grader Login</title></head>
 <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
     
-    <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 300px; text-align: center;">
+    <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center;">
         <h2>Sports Grader Login</h2>
         <form action="/login" method="POST">
-            <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
-            <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px;"><br>
+            <input type="email" name="email" placeholder="Email" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"><br>
+            <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"><br>
             <button type="submit" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Log In</button>
         </form>
         <p style="font-size: 13px; margin-top: 15px;">
@@ -804,24 +952,30 @@ LOGIN_PAGE_HTML = """
         <p style="font-size: 14px;">Don't have an account? <a href="#" onclick="document.getElementById('reg-modal').style.display='block'">Create Account</a></p>
     </div>
 
-    <div id="reg-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
-        <h3>Register</h3>
+    <div id="reg-modal" style="display:none; position:fixed; top:10%; left:50%; transform: translateX(-50%); background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 320px;">
+        <h3>Register Account</h3>
         <form action="/register" method="POST">
-            <input type="text" name="first_name" placeholder="First Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <input type="text" name="last_name" placeholder="Last Name" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <input type="email" name="email" placeholder="Email Address" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <input type="password" name="password" placeholder="Password" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Register</button>
+            <input type="text" name="first_name" placeholder="First Name" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
+            <input type="text" name="last_name" placeholder="Last Name" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
+            <input type="email" name="email" placeholder="Email Address" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
+            <input type="password" name="password" placeholder="Password (min 8 chars)" minlength="8" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
+            
+            <div style="text-align: left; margin: 10px 0; font-size: 12px;">
+                <input type="checkbox" name="agreement" id="agreement" required>
+                <label for="agreement">I agree to the <a href="terms.pdf" target="_blank">Terms of Service</a></label>
+            </div>
+
+            <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Register & Send 2FA</button>
         </form>
         <button onclick="document.getElementById('reg-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:red; cursor:pointer;">Cancel</button>
     </div>
 
-    <div id="reset-modal" style="display:none; position:fixed; top:10%; left:35%; background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 300px;">
+    <div id="reset-modal" style="display:none; position:fixed; top:10%; left:50%; transform: translateX(-50%); background:white; padding:20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 320px;">
         <h3 style="color: #007bff;">Reset Password</h3>
         <p style="font-size: 12px; color: #666;">Enter your email and a new password to update your account.</p>
         <form action="/reset-password" method="POST">
-            <input type="email" name="email" placeholder="Enter your Email" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
-            <input type="password" name="new_password" placeholder="New Password" required style="width: 100%; padding: 8px; margin: 5px 0;"><br>
+            <input type="email" name="email" placeholder="Enter your Email" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
+            <input type="password" name="new_password" placeholder="New Password" required style="width: 100%; padding: 8px; margin: 5px 0; box-sizing: border-box;"><br>
             <button type="submit" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Update Password</button>
         </form>
         <button onclick="document.getElementById('reset-modal').style.display='none'" style="margin-top:10px; background:none; border:none; color:black; cursor:pointer;">Cancel</button>
@@ -831,15 +985,33 @@ LOGIN_PAGE_HTML = """
 </html>
 """
 
+VERIFY_2FA_PAGE_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>Two-Factor Authentication</title></head>
+<body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f6f9;">
+    <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center;">
+        <h2 style="color: #007bff;">2-Factor Security</h2>
+        <p style="font-size: 13px; color: #555;">We sent a 6-digit code from <strong>contact@evalbricks.com</strong> to {{ email }}.</p>
+        <form action="/verify-2fa" method="POST">
+            <input type="text" name="otp_code" placeholder="000000" maxlength="6" pattern="\\d{6}" required style="width: 100%; padding: 12px; margin: 10px 0; font-size: 20px; letter-spacing: 5px; text-align: center; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"><br>
+            <button type="submit" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; font-weight: bold;">Verify & Continue</button>
+        </form>
+        <p style="font-size: 12px; margin-top: 15px;"><a href="/login" style="color: #666;">Cancel and return to login</a></p>
+    </div>
+</body>
+</html>
+"""
+
 SHARED_CSS = """
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E"></script>
+<script async src="[https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E](https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E)"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
   gtag('config', 'G-W0VN6S115E');
 </script>
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369" crossorigin="anonymous"></script>
+<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369)" crossorigin="anonymous"></script>
 <style>
  :root {--primary-color: #007bff; --success-color: #28a745; --danger-color: #dc3545; --info-color: #17a2b8; --purple-color: #6f42c1; --dark-bg: #f4f6f9; --card-bg: #ffffff; --text-main: #333333; }
  * { box-sizing: border-box; }
@@ -864,6 +1036,8 @@ SHARED_CSS = """
  .top-nav a:hover { background: var(--primary-color); color: white; transform: translateY(-2px); }
  .top-nav a.nav-home { background: #333; color: white; }
  .top-nav a.nav-home:hover { background: #111; }
+ .top-nav a.nav-logout { background: #dc3545; color: white; margin-left: auto; }
+ .top-nav a.nav-logout:hover { background: #c82333; }
  @media (min-width: 768px) { .top-nav { justify-content: flex-start; padding: 15px 25px; gap: 12px; } .top-nav a { font-size: 14px; padding: 10px 16px; } }
 </style>
 """
@@ -875,6 +1049,7 @@ SHARED_NAV = """
     <a href="/upload-manager">📁 Data Manager</a>
     <a href="/create-lineup">⚽ Line Up</a>
     <a href="/analytics">📊 Analytics</a>
+    <a href="/logout" class="nav-logout">🚪 Log Out</a>
 </nav>
 """
 
@@ -900,6 +1075,7 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
 </style> 
 </head> 
 <body> 
+""" + SHARED_NAV + """
 <div class="container"> 
     <h1>Data & Voice Automation Suite</h1> 
     <p style="color:#666;">Select an engine interface workflow layout environment below:</p> 
@@ -1357,7 +1533,7 @@ function selectSport(button, sportType) {
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-6v6" class="btn-format" onclick="selectFormat(this, '6v6')">6v6</button>
+                <button type="button" id="btn-6x6" class="btn-format" onclick="selectFormat(this, '6x6')">6x6</button>
                 <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
             </div>
         `;
@@ -1438,8 +1614,8 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
  } 
  .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; } 
 </style> 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script> 
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
+<script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script> 
+<script src="[https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js](https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js)"></script>
 </head> 
 <body> 
 """ + SHARED_NAV + """
@@ -1590,7 +1766,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
 # # SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                        #
 # =====================================================================
 def get_mistral_embeddings(text):
-    url = "https://api.mistral.ai/v1/embeddings"
+    url = "[https://api.mistral.ai/v1/embeddings](https://api.mistral.ai/v1/embeddings)"
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
