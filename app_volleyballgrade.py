@@ -228,12 +228,16 @@ def verify_2fa():
         if not otp_record or otp_record.code != entered_code:
             return "Invalid 2FA Code. <a href='/verify-2fa'>Try again</a>", 400
             
-        expires_at = otp_record.expires_at.replace(tzinfo=datetime.timezone.utc) if otp_record.expires_at.tzinfo is None else otp_record.expires_at
+        # Ensure UTC timezone alignment for safe comparison
+        if otp_record.expires_at.tzinfo is None:
+            expires_at = otp_record.expires_at.replace(tzinfo=datetime.timezone.utc)
+        else:
+            expires_at = otp_record.expires_at
             
-        if expires_at < now:
+        # Compare via floating-point Unix timestamps
+        if expires_at.timestamp() < now.timestamp():
             return "Expired 2FA Code. <a href='/login'>Request a new one</a>", 400
             
-        # Update user status to verified (1), increment times_logged_in, set last_log_in
         user = User.query.filter_by(email=pending_email).first()
         if user:
             user.verified = True
