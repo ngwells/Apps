@@ -95,9 +95,9 @@ def is_device_remembered(user_id):
         return False
 
     hashed_cookie = hashlib.sha256(cookie_token.encode('utf-8')).hexdigest()
-    token_entry = RememberToken.query.filter_by(token_hash=hashed_cookie, user_id=str(user_id)).first()
+    token_entry = RememberToken.query.filter_by(token_hash=hashed_cookie).first()
 
-    if not token_entry:
+    if not token_entry or str(token_entry.user_id) != str(user_id):
         return False
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -109,6 +109,48 @@ def is_device_remembered(user_id):
         return False
 
     return True
+
+@app.route("/verify-2fa", methods=["GET", "POST"])
+def verify_2fa():
+    pending_email = session.get("pending_email")
+    if not pending_email:
+        return redirect(url_for("login"))
+        
+    if request.method == "POST":
+        entered_code = request.form.get("otp_code", "").strip()
+        otp_record = OTPCode.query.get(pending_email)
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not otp_record or otp_record.code != entered_code:
+            return "Invalid 2FA Code. <a href='/verify-2fa'>Try again</a>", 400
+            
+        if otp_record.expires_at.tzinfo is None:
+            expires_at = otp_record.expires_at.replace(tzinfo=datetime.timezone.utc)
+        else:
+            expires_at = otp_record.expires_at
+            
+        if expires_at.timestamp() < now.timestamp():
+            return "Expired 2FA Code. <a href='/login'>Request a new one</a>", 400
+            
+        user = User.query.filter_by(email=pending_email).first()
+        if user:
+            user.verified = True
+            user.times_logged_in = (user.times_logged_in or 0) + 1
+            user.last_log_in = now
+            db.session.delete(otp_record)
+            db.session.commit()
+            
+            session.pop("pending_email", None)
+            session["user_id"] = str(user.id)
+            
+            # FIX A: Always create and attach the remember_device cookie automatically
+            response = redirect(url_for("index"))
+            response = create_remember_cookie(response, user.id)
+
+            return response
+            
+    return render_template_string(VERIFY_2FA_PAGE_HTML, email=pending_email)
+
 
 def create_remember_cookie(response, user_id):
     """Generates a secure token, saves its hash to DB, and attaches HTTP-only cookie."""
@@ -124,13 +166,16 @@ def create_remember_cookie(response, user_id):
     db.session.add(new_token)
     db.session.commit()
 
+    # Dynamically determine if the connection is HTTPS (Render) or HTTP (Localhost)
+    is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
+
     response.set_cookie(
         "remember_device",
         raw_token,
         max_age=30 * 24 * 60 * 60,
         httponly=True,
         samesite="Lax",
-        secure=True
+        secure=is_secure
     )
     return response
 
@@ -287,7 +332,6 @@ def verify_2fa():
         
     if request.method == "POST":
         entered_code = request.form.get("otp_code", "").strip()
-        remember_me = request.form.get("remember_device") == "on"
         otp_record = OTPCode.query.get(pending_email)
         
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -313,9 +357,9 @@ def verify_2fa():
             session.pop("pending_email", None)
             session["user_id"] = str(user.id)
             
+            # FIX A: Always create and attach the remember_device cookie automatically
             response = redirect(url_for("index"))
-            if remember_me:
-                response = create_remember_cookie(response, user.id)
+            response = create_remember_cookie(response, user.id)
 
             return response
             
