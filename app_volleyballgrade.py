@@ -83,13 +83,13 @@ with app.app_context():
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
 def get_gmail_service():
-    """Retrieves or refreshes Gmail API credentials using environment variables."""
+    """Retrieves or refreshes Gmail API credentials strictly from environment variables."""
     refresh_token = os.environ.get("GMAIL_REFRESH_TOKEN")
     client_id = os.environ.get("GMAIL_CLIENT_ID")
     client_secret = os.environ.get("GMAIL_CLIENT_SECRET")
 
     if not all([refresh_token, client_id, client_secret]):
-        raise ValueError("Missing Gmail OAuth environment variables in Render configuration.")
+        raise ValueError("Missing required Gmail OAuth environment variables.")
 
     creds = Credentials(
         token=None,
@@ -100,7 +100,6 @@ def get_gmail_service():
         scopes=GMAIL_SCOPES
     )
     
-    # Automatically requests a fresh short-lived Access Token
     creds.refresh(Request())
     return build('gmail', 'v1', credentials=creds)
 
