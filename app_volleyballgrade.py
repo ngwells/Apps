@@ -245,27 +245,41 @@ def login():
     return render_template_string(LOGIN_PAGE_HTML)
 
 @app.route("/register", methods=["POST"])
+
 def register():
-    email = request.form.get("email", "").strip().lower()
+    # Sanitize inputs by stripping out potential injection symbols: ^ { [ ( ) ] } < > ; ' " ` \
+    sanitize_pattern = r"[^{\[\(\)\]\}<>;\'\"`\\]"
+    
+    raw_first = request.form.get("first_name", "").strip()
+    raw_last = request.form.get("last_name", "").strip()
+    raw_email = request.form.get("email", "").strip().lower()
+    
+    # Strip special characters
+    first_name = "".join(re.findall(sanitize_pattern, raw_first))
+    last_name = "".join(re.findall(sanitize_pattern, raw_last))
+    email = "".join(re.findall(sanitize_pattern, raw_email))
+    
     password = request.form.get("password", "")
     agreement = True if request.form.get("agreement") == "on" else False
 
     if not is_valid_email(email):
         return "Invalid email format. Please go back and try again.", 400
+
     if len(password) < 8:
         return "Password must be at least 8 characters long. <a href='/login'>Try again</a>", 400
+
     if not agreement:
         return "You must agree to the Terms of Service. <a href='/login'>Try again</a>", 400
-         
+
     if User.query.filter_by(email=email).first():
         return "Email already registered. <a href='/login'>Go to login</a>", 400
 
     hashed_pw = generate_password_hash(password)
     now = datetime.datetime.now(datetime.timezone.utc)
-    
+
     new_user = User(
-        first_name=request.form.get("first_name"),
-        last_name=request.form.get("last_name"),
+        first_name=first_name,
+        last_name=last_name,
         email=email,
         password=hashed_pw,
         agreement=True,
@@ -274,14 +288,17 @@ def register():
         times_logged_in=0,
         last_log_in=now
     )
+
     db.session.add(new_user)
     db.session.commit()
-    
+
     session["pending_email"] = email
+
     try:
         send_2fa_otp(email)
     except Exception:
         return "Account created, but failed to dispatch 2FA email.", 500
+
     return redirect(url_for("verify_2fa"))
 
 # --- KEEP ONLY THIS SINGLE INSTANCE IN YOUR FILE ---
