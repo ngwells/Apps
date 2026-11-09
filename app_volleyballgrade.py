@@ -543,7 +543,7 @@ def process_audio():
     try:
         with open(temp_filename, "rb") as f:
             transcription_response = client.audio.transcriptions.complete(
-                model="voxtral-mini-latest",
+                model="voxtral-small-transcribe-3-0",  
                 file={"content": f.read(), "file_name": temp_filename}
             )
         detected_text = transcription_response.text.strip()
