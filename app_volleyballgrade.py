@@ -543,7 +543,7 @@ def process_audio():
     try:
         with open(temp_filename, "rb") as f:
             transcription_response = client.audio.transcriptions.complete(
-                model="voxtral-small-transcribe-3-0",  
+                model="voxtral-mini-latest",
                 file={"content": f.read(), "file_name": temp_filename}
             )
         detected_text = transcription_response.text.strip()
@@ -702,7 +702,7 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    positions_count = format_type[0] if format_type else "standard"
+   positions_count = format_type.split("v")[0] if format_type and "v" in format_type else "standard"
     
     prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation. 
 Each item in the list must be an object with two keys: "Position" and "Description". 
