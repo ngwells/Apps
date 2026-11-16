@@ -899,8 +899,17 @@ def compute_metrics():
         ideal_player_df.rename(columns={ideal_player_df.columns[1]: 'Description'}, inplace=True)
             
     try:
-        player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
-        ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
+        
+        player_texts = player_evals_df["Description"].tolist()
+        ideal_texts = ideal_player_df["Description"].tolist()  # (or whatever column name ideal_player_df uses)
+
+        all_embeddings = get_mistral_embeddings(player_texts + ideal_texts)
+        player_embeddings = all_embeddings[:len(player_texts)]
+        ideal_embeddings = all_embeddings[len(player_texts):]
+        
+        
+        #player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
+        #ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
         
         similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
         similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
@@ -1865,32 +1874,36 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
 # =====================================================================
 # # SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                        #
 # =====================================================================
-def get_mistral_embeddings(text):
-    url = "[https://api.mistral.ai/v1/embeddings](https://api.mistral.ai/v1/embeddings)"
+
+def get_mistral_embeddings(texts):
+    if not texts:
+        return []
+    url = "https://api.mistral.ai/v1/embeddings"
     headers = {
         "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
-    clean_text = str(text)[:1000] if text else "Empty text node frame"
+    # Ensure every item is a non-empty string
+    cleaned_texts = [str(t).strip() if pd.notna(t) and str(t).strip() else " " for t in texts]
     payload = {
         "model": "mistral-embed",
-        "input": [clean_text]
+        "input": cleaned_texts
     }
-    import time
     for attempt in range(3):
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            if response.status_code == 200:
-                return response.json()["data"][0]["embedding"]
-            elif response.status_code in [520, 502, 503, 504]:
-                time.sleep(1 + attempt)
-                continue
-            else:
-                return None
-        except Exception:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json().get("data", [])
+            # Sort by index to guarantee exact row alignment
+            data_sorted = sorted(data, key=lambda x: x["index"])
+            return [item["embedding"] for item in data_sorted]
+        except Exception as e:
+            print(f"Mistral batch embedding attempt {attempt + 1} failed: {e}")
             time.sleep(1 + attempt)
-            continue
-    return None
+    return [[0.0] * 1024 for _ in cleaned_texts]
+
+
+
 
 def fix_misspelled_position_header(df):
     target = "position"
