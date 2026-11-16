@@ -975,7 +975,7 @@ def compute_metrics():
         values = []
         link_colors = []
         
-        for _, row in results_df.sort_values('Confidence Score', ascending=False).groupby('Player', as_index=False).head(5).iterrows():
+        for _, row in results_df.sort_values('Confidence Score', ascending=False).groupby('Position', as_index=False).head(5).iterrows():
             player = row['Player']
             pos = row['Position']
             score = float(row['Confidence Score'])
