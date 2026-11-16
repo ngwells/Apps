@@ -890,6 +890,11 @@ def compute_metrics():
     player_evals_df['Player'] = player_evals_df['Player'].apply(
         lambda x: str(x).strip() if str(x).strip().lower().startswith('player') else f"Player {str(x).strip()}"
     )
+    player_evals_df = (
+        player_evals_df[['Player', 'Description']]
+        .groupby('Player', as_index=False)['Description']
+        .agg(' '.join)
+    )
         
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
@@ -931,7 +936,7 @@ def compute_metrics():
         
         top_players_per_position = {}
         for position in similarity_df.columns:
-            top_players = similarity_df[position].sort_values(ascending=False).head(3)
+            top_players = similarity_df[position].sort_values(ascending=False)
             top_players_per_position[position] = top_players
             
         results = []
