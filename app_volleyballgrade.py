@@ -988,10 +988,13 @@ def compute_metrics():
             rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
             link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.4)")
         
+        dynamic_height = max(950, len(player_indices) * 32)
+
         sankey_fig = go.Figure(go.Sankey(
+            arrangement="snap",
             node=dict(
-                pad=15,
-                thickness=20,
+                pad=24,
+                thickness=24,
                 line=dict(color="black", width=0.5),
                 label=labels,
                 color=node_colors
@@ -1004,7 +1007,12 @@ def compute_metrics():
             )
         ))
         
-        sankey_fig.update_layout(title_text="Player-to-Position Flow Alignment", font_size=11, height=350)
+        sankey_fig.update_layout(
+            title_text="Player-to-Position Flow Alignment",
+            font=dict(size=13),
+            height=dynamic_height,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
         cache.set('sankey_json', sankey_fig.to_json())
         
         barchart_data = []
@@ -1778,7 +1786,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     {% if sankey_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
-        <div id="sankey-chart-container" style="width:100%; height:350px;"></div> 
+        <div id="sankey-chart-container" style="width:100%; height:500px;"></div> 
         <script> 
             const sankeyData = {{ sankey_json|safe }}; 
             Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
