@@ -855,6 +855,7 @@ def compute_metrics():
         return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
         
     player_evals_df = pd.DataFrame(processed_session)
+    player_evals_df = player_evals_df[player_evals_df['Score'] >= 50]
     player_evals_df.columns = [str(c).strip() for c in player_evals_df.columns]
     
     player_col = next((c for c in player_evals_df.columns if c.lower() == 'player'), None)
@@ -875,6 +876,25 @@ def compute_metrics():
         player_evals_df['Description'] = player_evals_df['Transcript']
     else:
         player_evals_df['Description'] = player_evals_df[player_evals_df.columns[-1]]
+
+    player_evals_df['Description'] = player_evals_df.apply(
+        lambda row: re.sub(
+            rf"(?i)(?:^|\b)(?:\S+\s+)?{re.escape(str(row['Player']))}\b[,.\s:-]*", 
+            "", 
+            str(row['Description']), 
+            count=1
+        ).strip(),
+        axis=1
+    )
+
+    player_evals_df['Player'] = player_evals_df['Player'].apply(
+        lambda x: str(x).strip() if str(x).strip().lower().startswith('player') else f"Player {str(x).strip()}"
+    )
+    player_evals_df = (
+        player_evals_df[['Player', 'Description']]
+        .groupby('Player', as_index=False)['Description']
+        .agg(' '.join)
+    )
         
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
@@ -899,15 +919,24 @@ def compute_metrics():
         ideal_player_df.rename(columns={ideal_player_df.columns[1]: 'Description'}, inplace=True)
             
     try:
-        player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
-        ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
+        
+        player_texts = player_evals_df["Description"].tolist()
+        ideal_texts = ideal_player_df["Description"].tolist()  # (or whatever column name ideal_player_df uses)
+
+        all_embeddings = get_mistral_embeddings(player_texts + ideal_texts)
+        player_embeddings = all_embeddings[:len(player_texts)]
+        ideal_embeddings = all_embeddings[len(player_texts):]
+        
+        
+        #player_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in player_evals_df["Description"]]
+        #ideal_embeddings = [get_mistral_embeddings(desc) or [0]*1024 for desc in ideal_player_df["Description"]]
         
         similarity_matrix = cosine_similarity(player_embeddings, ideal_embeddings)
         similarity_df = pd.DataFrame(similarity_matrix, index=player_evals_df["Player"], columns=ideal_player_df["Position"])
         
         top_players_per_position = {}
         for position in similarity_df.columns:
-            top_players = similarity_df[position].sort_values(ascending=False).head(3)
+            top_players = similarity_df[position].sort_values(ascending=False)
             top_players_per_position[position] = top_players
             
         results = []
@@ -946,7 +975,7 @@ def compute_metrics():
         values = []
         link_colors = []
         
-        for _, row in results_df.iterrows():
+        for _, row in results_df.sort_values('Confidence Score', ascending=False).groupby('Player', as_index=False).head(5).iterrows():
             player = row['Player']
             pos = row['Position']
             score = float(row['Confidence Score'])
@@ -959,10 +988,13 @@ def compute_metrics():
             rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
             link_colors.append(f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.4)")
         
+        dynamic_height = max(950, len(player_indices) * 32)
+
         sankey_fig = go.Figure(go.Sankey(
+            arrangement="snap",
             node=dict(
-                pad=15,
-                thickness=20,
+                pad=24,
+                thickness=24,
                 line=dict(color="black", width=0.5),
                 label=labels,
                 color=node_colors
@@ -975,7 +1007,12 @@ def compute_metrics():
             )
         ))
         
-        sankey_fig.update_layout(title_text="Player-to-Position Flow Alignment", font_size=11, height=350)
+        sankey_fig.update_layout(
+            title_text="Player-to-Position Flow Alignment",
+            font=dict(size=13),
+            height=dynamic_height,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
         cache.set('sankey_json', sankey_fig.to_json())
         
         barchart_data = []
@@ -1714,8 +1751,8 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
  } 
  .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; } 
 </style> 
-<script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script> 
-<script src="[https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js](https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js)"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 </head> 
 <body> 
 """ + SHARED_NAV + """
@@ -1746,16 +1783,16 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     </div> 
     {% endif %} 
 
-    {% if sankey_json %} 
-    <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
-        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
-        <div id="sankey-chart-container" style="width:100%; height:350px;"></div> 
-        <script> 
-            const sankeyData = {{ sankey_json|safe }}; 
-            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
-        </script> 
-    </div> 
-    {% endif %} 
+    {% if sankey_json %}
+    <div class="section-box" style="border-left: 4px solid #17a2b8; height: auto; overflow: visible; margin-bottom: 24px;">
+        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3>
+        <div id="sankey-chart-container" style="width: 100%; height: auto; min-height: 950px;"></div>
+        <script>
+            const sankeyData = {{ sankey_json|safe }};
+            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true});
+        </script>
+    </div>
+    {% endif %}
     
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
@@ -1865,32 +1902,36 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
 # =====================================================================
 # # SECTION 2: UTILITIES & VECTOR EMBEDDINGS ENGINES                        #
 # =====================================================================
-def get_mistral_embeddings(text):
-    url = "[https://api.mistral.ai/v1/embeddings](https://api.mistral.ai/v1/embeddings)"
+
+def get_mistral_embeddings(texts):
+    if not texts:
+        return []
+    url = "https://api.mistral.ai/v1/embeddings"
     headers = {
         "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
-    clean_text = str(text)[:1000] if text else "Empty text node frame"
+    # Ensure every item is a non-empty string
+    cleaned_texts = [str(t).strip() if pd.notna(t) and str(t).strip() else " " for t in texts]
     payload = {
         "model": "mistral-embed",
-        "input": [clean_text]
+        "input": cleaned_texts
     }
-    import time
     for attempt in range(3):
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            if response.status_code == 200:
-                return response.json()["data"][0]["embedding"]
-            elif response.status_code in [520, 502, 503, 504]:
-                time.sleep(1 + attempt)
-                continue
-            else:
-                return None
-        except Exception:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json().get("data", [])
+            # Sort by index to guarantee exact row alignment
+            data_sorted = sorted(data, key=lambda x: x["index"])
+            return [item["embedding"] for item in data_sorted]
+        except Exception as e:
+            print(f"Mistral batch embedding attempt {attempt + 1} failed: {e}")
             time.sleep(1 + attempt)
-            continue
-    return None
+    return [[0.0] * 1024 for _ in cleaned_texts]
+
+
+
 
 def fix_misspelled_position_header(df):
     target = "position"
