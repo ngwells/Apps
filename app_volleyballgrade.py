@@ -975,7 +975,7 @@ def compute_metrics():
         values = []
         link_colors = []
         
-        for _, row in results_df.iterrows():
+        for _, row in results_df.sort_values('Confidence Score', ascending=False).groupby('Player', as_index=False).head(5).iterrows()
             player = row['Player']
             pos = row['Position']
             score = float(row['Confidence Score'])
@@ -1783,16 +1783,16 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     </div> 
     {% endif %} 
 
-    {% if sankey_json %} 
-    <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
-        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3> 
-        <div id="sankey-chart-container" style="width:100%; height:500px;"></div> 
-        <script> 
-            const sankeyData = {{ sankey_json|safe }}; 
-            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true}); 
-        </script> 
-    </div> 
-    {% endif %} 
+    {% if sankey_json %}
+    <div class="section-box" style="border-left: 4px solid #17a2b8; height: auto; overflow: visible; margin-bottom: 24px;">
+        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3>
+        <div id="sankey-chart-container" style="width: 100%; height: auto; min-height: 950px;"></div>
+        <script>
+            const sankeyData = {{ sankey_json|safe }};
+            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true});
+        </script>
+    </div>
+    {% endif %}
     
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
