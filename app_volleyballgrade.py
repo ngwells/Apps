@@ -855,6 +855,7 @@ def compute_metrics():
         return "Error: Missing ideal target vectors. Load an external spreadsheet or generate a Line Up blueprint first.", 400
         
     player_evals_df = pd.DataFrame(processed_session)
+    player_evals_df = player_evals_df[player_evals_df['Score'] >= 50]
     player_evals_df.columns = [str(c).strip() for c in player_evals_df.columns]
     
     player_col = next((c for c in player_evals_df.columns if c.lower() == 'player'), None)
@@ -875,6 +876,20 @@ def compute_metrics():
         player_evals_df['Description'] = player_evals_df['Transcript']
     else:
         player_evals_df['Description'] = player_evals_df[player_evals_df.columns[-1]]
+
+    player_evals_df['Description'] = player_evals_df.apply(
+        lambda row: re.sub(
+            rf"(?i)(?:^|\b)(?:\S+\s+)?{re.escape(str(row['Player']))}\b[,.\s:-]*", 
+            "", 
+            str(row['Description']), 
+            count=1
+        ).strip(),
+        axis=1
+    )
+
+    player_evals_df['Player'] = player_evals_df['Player'].apply(
+        lambda x: str(x).strip() if str(x).strip().lower().startswith('player') else f"Player {str(x).strip()}"
+    )
         
     if uploaded_session:
         ideal_player_df = pd.DataFrame(uploaded_session)
@@ -1723,8 +1738,8 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
  } 
  .badge-alert { background: var(--danger-color); color: white; padding: 2px 5px; font-size: 10px; font-weight: bold; border-radius: 3px; } 
 </style> 
-<script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script> 
-<script src="[https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js](https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js)"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.27.0/plotly.min.js"></script>
 </head> 
 <body> 
 """ + SHARED_NAV + """
