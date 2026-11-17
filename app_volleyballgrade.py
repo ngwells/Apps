@@ -1731,6 +1731,26 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             <span style="color:#999; font-style: italic;">No configuration structure generated yet.</span> 
         {% endif %} 
     </div> 
+
+    <!-- Separate Container for Extracted Board Positions Table -->
+    <div id="board-positions-container" style="margin-top: 25px;">
+        <div class="table-wrap" style="border: 2px solid #2e7d32; border-radius: 8px;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background: #e8f5e9;">
+                        <th style="padding: 12px; color: #2e7d32; text-align: left; font-size: 14px;">Active Tactical Board Layout (Extracted Positions)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td id="board-positions-cell" style="padding: 15px; font-family: monospace; font-weight: bold; color: #1b5e20; font-size: 15px; background: #ffffff;">
+                            <span style="color: #999; font-style: italic; font-weight: normal;">No board positions extracted yet.</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
     
     <div class="debug-panel"> 
         <h4 style="margin:0;">Session Context:</h4> 
@@ -1962,7 +1982,6 @@ function selectSport(button, sportType) {
     container.innerHTML = '';
 
     if (sportType === 'soccer') {
-        // Preserve previous format if valid, otherwise default to 7v7
         if (!['7v7', '9v9', '11v11'].includes(selectedFormatName)) {
             selectedFormatName = '7v7';
         }
@@ -2035,6 +2054,8 @@ async function runTacticalPrompt() {
     const runButton = document.getElementById('execute-btn'); 
     const spinner = document.getElementById('loading-spinner'); 
     const responseAnchor = document.getElementById('response-anchor'); 
+    const boardPositionsCell = document.getElementById('board-positions-cell');
+    
     runButton.disabled = true; 
     spinner.style.display = "block"; 
     
@@ -2061,6 +2082,9 @@ async function runTacticalPrompt() {
         
         if (data.status === 'success') {
             responseAnchor.innerHTML = data.html_payload; 
+            if (boardPositionsCell) {
+                boardPositionsCell.innerHTML = data.board_payload || '<span style="color: #999; font-style: italic; font-weight: normal;">No active board positions found.</span>';
+            }
         } else {
             responseAnchor.innerHTML = `<span style="color:var(--danger-color); font-weight:bold;">Error: ${data.message}</span>`; 
         } 
@@ -2077,6 +2101,8 @@ function clearBlueprintFrame() {
     .then(data => {
         if(data.status === 'success') {
             document.getElementById('response-anchor').innerHTML = '<span style="color:#999; font-style: italic;">No configuration structure generated yet.</span>'; 
+            const cell = document.getElementById('board-positions-cell');
+            if (cell) cell.innerHTML = '<span style="color: #999; font-style: italic; font-weight: normal;">No board positions extracted yet.</span>';
         } 
     }); 
 } 
