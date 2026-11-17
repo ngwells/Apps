@@ -691,13 +691,14 @@ def clear_blueprint():
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
     if "user_id" not in session:
-        return redirect(url_for("login"))
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
     if not API_KEY:
         return jsonify({"status": "error", "message": "Mistral API key missing."}), 500
     
     req_body = request.get_json() or {}
     sport = req_body.get("sport") or cache.get('selected_sport') or "Soccer"
     format_type = req_body.get("format_type") or cache.get('selected_format') or "11v11"
+    active_board_players = req_body.get("board_players", []) # Captured from canvas state
     
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
@@ -721,6 +722,26 @@ Output ONLY a valid JSON array."""
         ],
         "temperature": 0.2
     }
+    
+    # [Existing Mistral API Request & JSON Parsing Logic...]
+    # (Keep your existing API call and parsing code here)
+    
+    # After generating html_table, append the board position codes summary if available:
+    board_summary_html = ""
+    if active_board_players and str(sport).lower() == 'soccer':
+        pos_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
+        board_summary_html = f"""
+        <div style="margin-top: 15px; padding: 12px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 6px;">
+            <strong style="color: #2e7d32;">Active Tactical Board Layout ({format_type}):</strong>
+            <p style="margin: 5px 0 0 0; font-family: monospace; font-weight: bold; color: #1b5e20;">
+                {" → ".join(pos_codes)}
+            </p>
+        </div>
+        """
+    
+    final_payload_html = html_table + board_summary_html
+    cache.set('cached_blueprint', final_payload_html)
+    return jsonify({"status": "success", "html_payload": final_payload_html})
     
     import time
     api_response = None
@@ -1940,11 +1961,22 @@ async function runTacticalPrompt() {
     runButton.disabled = true; 
     spinner.style.display = "block"; 
     
+    // Extract current board player position codes if soccer board is active
+    let boardPlayersPayload = [];
+    const wrapper = document.getElementById('soccer-pitch-wrapper');
+    if (wrapper && wrapper.style.display !== 'none' && typeof currentPlayers !== 'undefined') {
+        boardPlayersPayload = currentPlayers;
+    }
+
     try {
         const response = await fetch('/create-lineup/generate-tactics', {
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ sport: selectedSportName, format_type: selectedFormatName }) 
+            body: JSON.stringify({ 
+                sport: selectedSportName, 
+                format_type: selectedFormatName,
+                board_players: boardPlayersPayload 
+            }) 
         }); 
         const data = await response.json(); 
         spinner.style.display = "none"; 
