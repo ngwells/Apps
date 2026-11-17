@@ -1579,7 +1579,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 <style> 
  .placeholder-box { border: 2px dashed #ffc107; background: #fffde7; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 25px; } 
  .format-selector { display: flex; gap: 10px; margin: 20px 0; justify-content: center; } 
- .btn-format { background: white; color: var(--primary-color); border: 2px solid var(--primary-color); padding: 10px 20px; flex: 1; max-width: 150px; } 
+ .btn-format { background: white; color: var(--primary-color); border: 2px solid var(--primary-color); padding: 10px 20px; flex: 1; max-width: 150px; cursor: pointer; } 
  .btn-format.active { background: var(--primary-color); color: white; } 
  .btn-execute { background: var(--success-color); color: white; } 
  .btn-clear-frame { background: var(--danger-color); color: white; } 
@@ -1622,7 +1622,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         {% endif %}
     </div>
     
-    <!-- Interactive Soccer Formation Board -->
+    <!-- Interactive Soccer Formation Board (Outside matrix-format-container so innerHTML updates never wipe it out) -->
     <div id="soccer-pitch-wrapper" style="display: none; margin: 20px auto; text-align: center;">
         <div class="tactical-container" style="background-color: #2b2b2b; color: white; font-family: Arial, sans-serif; text-align: center; padding: 15px; border-radius: 8px; display: inline-block; max-width: 100%;">
             <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-format-label">11v11</span>)</h3>
@@ -1630,7 +1630,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             <canvas id="soccerPitchCanvas" width="400" height="617" style="background-color: #2d6a30; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
         </div>
     </div>
-
     
     <div class="btn-group"> 
         <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()">Execute Blueprint Generation</button> 
@@ -1668,7 +1667,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     const scaleY = canvas.height / pitchLength;
 
     const baseFormations = {
-        11: [ // 4-3-3
+        11: [
             {pos: 'GK', x: 34, y: 6},
             {pos: 'LDB', x: 12, y: 26},
             {pos: 'CDB', x: 26, y: 24},
@@ -1681,7 +1680,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             {pos: 'CF', x: 34, y: 80},
             {pos: 'RFW', x: 53, y: 78}
         ],
-        9: [ // 3-2-3
+        9: [
             {pos: 'GK', x: 34, y: 6},
             {pos: 'LDB', x: 15, y: 26},
             {pos: 'CDB', x: 34, y: 24},
@@ -1692,7 +1691,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             {pos: 'CF', x: 34, y: 80},
             {pos: 'RFW', x: 53, y: 78}
         ],
-        7: [ // 2-3-1
+        7: [
             {pos: 'GK', x: 34, y: 6},
             {pos: 'LDB', x: 22, y: 26},
             {pos: 'RDB', x: 46, y: 26},
@@ -1713,17 +1712,11 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
 
         if (row === 'attacking') {
-            if (col === 'left') p.pos = 'LFW';
-            else if (col === 'center') p.pos = 'CF';
-            else if (col === 'right') p.pos = 'RFW';
+            p.pos = col === 'left' ? 'LFW' : (col === 'center' ? 'CF' : 'RFW');
         } else if (row === 'middle') {
-            if (col === 'left') p.pos = 'LM';
-            else if (col === 'center') p.pos = 'CM';
-            else if (col === 'right') p.pos = 'RM';
+            p.pos = col === 'left' ? 'LM' : (col === 'center' ? 'CM' : 'RM');
         } else if (row === 'defensive') {
-            if (col === 'left') p.pos = 'LDB';
-            else if (col === 'center') p.pos = 'CDB';
-            else if (col === 'right') p.pos = 'RDB';
+            p.pos = col === 'left' ? 'LDB' : (col === 'center' ? 'CDB' : 'RDB');
         }
     }
 
@@ -1734,16 +1727,12 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         ctx.fillStyle = 'white';
         ctx.lineWidth = 2;
 
-        // 1. Outer boundary
         ctx.strokeRect(0, 0, canvas.width, canvas.height);
-
-        // 2. Halfway line
         ctx.beginPath();
         ctx.moveTo(0, canvas.height / 2);
         ctx.lineTo(canvas.width, canvas.height / 2);
         ctx.stroke();
 
-        // 3. Center circle & spot
         ctx.beginPath();
         ctx.arc(canvas.width / 2, canvas.height / 2, 9.15 * scaleX, 0, 2 * Math.PI);
         ctx.stroke();
@@ -1752,7 +1741,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, 2 * Math.PI);
         ctx.fill();
 
-        // 4. Penalty & Goal Areas
         let boxWidthPx = 40.32 * scaleX;
         let boxDepthPx = 16.5 * scaleY;
         let boxX = (canvas.width - boxWidthPx) / 2;
@@ -1761,21 +1749,18 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         let goalDepthPx = 5.5 * scaleY;
         let goalX = (canvas.width - goalWidthPx) / 2;
 
-        // Bottom boxes
         ctx.strokeRect(boxX, 0, boxWidthPx, boxDepthPx);
         ctx.strokeRect(goalX, 0, goalWidthPx, goalDepthPx);
         ctx.beginPath();
         ctx.arc(canvas.width / 2, 11 * scaleY, 3, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Top boxes
         ctx.strokeRect(boxX, canvas.height - boxDepthPx, boxWidthPx, boxDepthPx);
         ctx.strokeRect(goalX, canvas.height - goalDepthPx, goalWidthPx, goalDepthPx);
         ctx.beginPath();
         ctx.arc(canvas.width / 2, canvas.height - (11 * scaleY), 3, 0, 2 * Math.PI);
         ctx.fill();
 
-        // 5. Draw players
         players.forEach(p => {
             let px = p.x * scaleX;
             let py = canvas.height - (p.y * scaleY);
@@ -1843,7 +1828,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 
     window.addEventListener('touchend', () => { selectedPlayer = null; });
 
-    // Global hook triggered whenever Sport or Matrix Format changes
     window.updateSoccerPitchBoard = function(sport, formatStr) {
         const wrapper = document.getElementById('soccer-pitch-wrapper');
         const label = document.getElementById('active-format-label');
