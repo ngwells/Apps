@@ -1785,7 +1785,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </div> 
     </div> 
     
-   % if position_rankings_json %}
+    {% if position_rankings_json %}
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     
     <div class="section-box" style="border-left: 4px solid #10b981; background: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.05);">
@@ -2000,7 +2000,7 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
     </div>
     {% endif %}
 
-    {
+    
     {% if wordcloud_data %} 
     <div class="section-box" style="border-left: 4px solid #9467bd;"> 
         <h3 style="color:#9467bd;">📊 High-Speed Data Visualizations</h3> 
