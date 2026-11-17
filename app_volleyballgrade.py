@@ -1657,7 +1657,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     </div> 
 </div> 
 <script> 
-
 (function() {
     const canvas = document.getElementById('soccerPitchCanvas');
     if (!canvas) return;
@@ -1850,13 +1849,11 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         const label = document.getElementById('active-format-label');
         if (!wrapper) return;
 
-        // Parse 7 from '7v7', 9 from '9v9', or 11 from '11v11'
         const formatNum = parseInt(String(formatStr || '').replace(/[^0-9]/g, ''), 10);
 
         if (String(sport).toLowerCase() === 'soccer' && [7, 9, 11].includes(formatNum)) {
             wrapper.style.display = 'block';
             if (label) label.textContent = `${formatNum}v${formatNum}`;
-            // Deep clone so dragging resets cleanly when switching formats
             players = JSON.parse(JSON.stringify(baseFormations[formatNum]));
             drawPitch();
         } else {
@@ -1865,9 +1862,8 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     };
 })();
 
-
 let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
-let selectedFormatName = "{{ selected_format|safe }}"; 
+let selectedFormatName = "{{ selected_format|safe }}" || "11v11"; 
 
 function selectSport(button, sportType) {
     document.querySelectorAll('.sport-selector .btn-format').forEach(btn => {
@@ -1875,11 +1871,8 @@ function selectSport(button, sportType) {
     });
     button.classList.add('active');
     selectedSportName = sportType;
-   
-    selectedFormatName = '';
-    if (window.updateSoccerPitchBoard) {
-        window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
-    }
+    selectedFormatName = sportType === 'soccer' ? '11v11' : '';
+
     const container = document.getElementById('matrix-format-container');
     container.innerHTML = '';
 
@@ -1889,25 +1882,33 @@ function selectSport(button, sportType) {
             <div class="format-selector">
                 <button type="button" id="btn-7v7" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
                 <button type="button" id="btn-9v9" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
-                <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+                <button type="button" id="btn-11v11" class="btn-format active" onclick="selectFormat(this, '11v11')">11v11</button>
             </div>
         `;
-    } else if (sportType === 'basketball') {
-        container.innerHTML = `
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-5v5" class="btn-format" onclick="selectFormat(this, '5v5')">5v5</button>
-                <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
-            </div>
-        `;
-    } else if (sportType === 'volleyball') {
-        container.innerHTML = `
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-6x6" class="btn-format" onclick="selectFormat(this, '6x6')">6x6</button>
-                <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
-            </div>
-        `;
+        if (window.updateSoccerPitchBoard) {
+            window.updateSoccerPitchBoard('soccer', '11v11');
+        }
+    } else {
+        if (window.updateSoccerPitchBoard) {
+            window.updateSoccerPitchBoard(sportType, '');
+        }
+        if (sportType === 'basketball') {
+            container.innerHTML = `
+                <h3>1. Select Roster Matrix Format</h3>
+                <div class="format-selector">
+                    <button type="button" id="btn-5v5" class="btn-format" onclick="selectFormat(this, '5v5')">5v5</button>
+                    <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
+                </div>
+            `;
+        } else if (sportType === 'volleyball') {
+            container.innerHTML = `
+                <h3>1. Select Roster Matrix Format</h3>
+                <div class="format-selector">
+                    <button type="button" id="btn-6x6" class="btn-format" onclick="selectFormat(this, '6x6')">6x6</button>
+                    <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
+                </div>
+            `;
+        }
     }
 
     fetch('/create-lineup/select-sport', {
@@ -1919,13 +1920,19 @@ function selectSport(button, sportType) {
 
 function selectFormat(clickedButton, formatValue) {
     const parentSelector = clickedButton.closest('.format-selector');
-    parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active')); 
+    if (parentSelector) {
+        parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active'));
+    }
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
     if (window.updateSoccerPitchBoard) {
         window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
     }
-    fetch('/create-lineup/select-format', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: formatValue }) }); 
+    fetch('/create-lineup/select-format', {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ format_type: formatValue }) 
+    }); 
 }
 
 async function runTacticalPrompt() {
@@ -1967,27 +1974,29 @@ function clearBlueprintFrame() {
         } 
     }); 
 } 
+
 function syncPitchFromActiveButtons() {
     const activeBtns = Array.from(document.querySelectorAll('button.active')).map(b => b.textContent.trim().toLowerCase());
-    const sport = activeBtns.find(t => ['soccer', 'basketball', 'volleyball'].includes(t)) || String(selectedSportName || '').toLowerCase();
-    const format = activeBtns.find(t => ['7v7', '9v9', '11v11'].includes(t)) || String(selectedFormatName || '').toLowerCase();
+    const sport = activeBtns.find(t => ['soccer', 'basketball', 'volleyball'].includes(t)) || String(selectedSportName || 'soccer').toLowerCase();
+    const format = activeBtns.find(t => ['7v7', '9v9', '11v11'].includes(t)) || String(selectedFormatName || '11v11').toLowerCase();
 
     if (window.updateSoccerPitchBoard) {
         window.updateSoccerPitchBoard(sport, format);
     }
 }
 
-const matrixContainer = document.getElementById('matrix-format-container');
-if (matrixContainer) {
-    matrixContainer.addEventListener('click', (e) => {
-        if (e.target && e.target.classList.contains('btn-format')) {
-            setTimeout(syncPitchFromActiveButtons, 10);
-        }
-    });
-}
+document.addEventListener('click', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('btn-format')) {
+        setTimeout(syncPitchFromActiveButtons, 10);
+    }
+});
 
+// Initial render trigger on page load
+if (!selectedFormatName && selectedSportName === 'soccer') {
+    selectedFormatName = '11v11';
+}
 syncPitchFromActiveButtons();
-</script> 
+</script>
 </body> 
 </html>"""
 
