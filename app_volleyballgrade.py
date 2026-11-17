@@ -719,26 +719,37 @@ def generate_tactics():
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
-    # --- Translate Abbreviations to Full Names & Format for Prompt ---
+    # --- Process Positions & Handle Duplicate Suffixes (_1, _2) ---
     position_context_str = ""
     board_summary_html = ""
     
     if active_board_players and str(sport).lower() == 'soccer':
         raw_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
-        full_names = [SOCCER_POSITION_NAMES.get(code, code) for code in raw_codes]
         
-        if full_names:
-            # Weave into prompt instruction
-            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(full_names)}."
-            # For the separate display table
-            board_summary_html = " → ".join(full_names)
+        # Count occurrences to assign _1, _2 suffix when duplicated
+        seen_counts = {}
+        processed_full_names = []
+        
+        for code in raw_codes:
+            base_name = SOCCER_POSITION_NAMES.get(code, code)
+            seen_counts[code] = seen_counts.get(code, 0) + 1
+            
+            if seen_counts[code] > 1 or raw_codes.count(code) > 1:
+                labeled_name = f"{base_name} _{seen_counts[code]}"
+            else:
+                labeled_name = base_name
+                
+            processed_full_names.append(labeled_name)
+            
+        if processed_full_names:
+            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(processed_full_names)}. For duplicate position roles (like _1 and _2), detail their shared core traits as well as their distinct tactical responsibilities and differing traits."
+            board_summary_html = " → ".join(processed_full_names)
 
     positions_count = format_type.split("v")[0] if format_type and "v" in format_type else "standard"
     
-    # Inject position_context_str dynamically for soccer, leaving other sports untouched
     prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation.{position_context_str} 
 Each item in the list must be an object with two keys: "Position" and "Description". 
-For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, and key technical skills based on all-time great players for that position. 
+For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, key technical skills, and where applicable, shared vs. differing traits for paired roles. 
 Output ONLY a valid JSON array."""
     
     headers = {
