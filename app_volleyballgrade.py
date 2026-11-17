@@ -1596,36 +1596,24 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     
     <h3>1. Select Sport</h3>
     <div class="format-selector sport-selector">
-        <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
+        <button type="button" id="btn-soccer" class="btn-format {% if selected_sport == 'soccer' or not selected_sport %}active{% endif %}" onclick="selectSport(this, 'soccer')">Soccer</button>
         <button type="button" id="btn-basketball" class="btn-format {% if selected_sport == 'basketball' %}active{% endif %}" onclick="selectSport(this, 'basketball')">Basketball</button>
         <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
     </div>
 
     <div id="matrix-format-container">
-        {% if selected_sport == 'soccer' %}
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
-                <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
-                <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
-            </div>
-        {% elif selected_sport == 'basketball' %}
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-5x5" class="btn-format {% if selected_format == '5x5' %}active{% endif %}" onclick="selectFormat(this, '5x5')">5x5</button>
-            </div>
-        {% elif selected_sport == 'volleyball' %}
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-6x6" class="btn-format {% if selected_format == '6x6' %}active{% endif %}" onclick="selectFormat(this, '6x6')">6x6</button>
-            </div>
-        {% endif %}
+        <h3>1. Select Roster Matrix Format</h3>
+        <div class="format-selector">
+            <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' or not selected_format %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
+            <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
+            <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
+        </div>
     </div>
     
-    <!-- Interactive Soccer Formation Board (Outside matrix-format-container so innerHTML updates never wipe it out) -->
-    <div id="soccer-pitch-wrapper" style="display: none; margin: 20px auto; text-align: center;">
+    <!-- Interactive Soccer Formation Board -->
+    <div id="soccer-pitch-wrapper" style="display: block; margin: 20px auto; text-align: center;">
         <div class="tactical-container" style="background-color: #2b2b2b; color: white; font-family: Arial, sans-serif; text-align: center; padding: 15px; border-radius: 8px; display: inline-block; max-width: 100%;">
-            <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-format-label">11v11</span>)</h3>
+            <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-format-label">7v7</span>)</h3>
             <p style="font-size: 13px; color: #ccc;">Click and drag any player position. Labels update dynamically based on field zones!</p>
             <canvas id="soccerPitchCanvas" width="400" height="617" style="background-color: #2d6a30; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
         </div>
@@ -1656,132 +1644,155 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     </div> 
 </div> 
 <script> 
-(function() {
+const baseFormations = {
+    11: [
+        {pos: 'GK', x: 34, y: 6},
+        {pos: 'LDB', x: 12, y: 26},
+        {pos: 'CDB', x: 26, y: 24},
+        {pos: 'CDB', x: 42, y: 24},
+        {pos: 'RDB', x: 56, y: 26},
+        {pos: 'LM', x: 18, y: 55},
+        {pos: 'CM', x: 34, y: 50},
+        {pos: 'RM', x: 50, y: 55},
+        {pos: 'LFW', x: 15, y: 78},
+        {pos: 'CF', x: 34, y: 80},
+        {pos: 'RFW', x: 53, y: 78}
+    ],
+    9: [
+        {pos: 'GK', x: 34, y: 6},
+        {pos: 'LDB', x: 15, y: 26},
+        {pos: 'CDB', x: 34, y: 24},
+        {pos: 'RDB', x: 53, y: 26},
+        {pos: 'CM', x: 24, y: 52},
+        {pos: 'CM', x: 44, y: 52},
+        {pos: 'LFW', x: 15, y: 78},
+        {pos: 'CF', x: 34, y: 80},
+        {pos: 'RFW', x: 53, y: 78}
+    ],
+    7: [
+        {pos: 'GK', x: 34, y: 6},
+        {pos: 'LDB', x: 22, y: 26},
+        {pos: 'RDB', x: 46, y: 26},
+        {pos: 'LM', x: 15, y: 55},
+        {pos: 'CM', x: 34, y: 52},
+        {pos: 'RM', x: 53, y: 55},
+        {pos: 'CF', x: 34, y: 80}
+    ]
+};
+
+let currentPlayers = [];
+let selectedPlayer = null;
+
+function updatePlayerPositionLabel(p) {
+    if (p.pos === 'GK') return;
+    let col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
+    let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
+
+    if (row === 'attacking') {
+        p.pos = col === 'left' ? 'LFW' : (col === 'center' ? 'CF' : 'RFW');
+    } else if (row === 'middle') {
+        p.pos = col === 'left' ? 'LM' : (col === 'center' ? 'CM' : 'RM');
+    } else if (row === 'defensive') {
+        p.pos = col === 'left' ? 'LDB' : (col === 'center' ? 'CDB' : 'RDB');
+    }
+}
+
+function drawSoccerPitch() {
     const canvas = document.getElementById('soccerPitchCanvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-
     const pitchWidth = 68;
     const pitchLength = 105;
     const scaleX = canvas.width / pitchWidth;
     const scaleY = canvas.height / pitchLength;
 
-    const baseFormations = {
-        11: [
-            {pos: 'GK', x: 34, y: 6},
-            {pos: 'LDB', x: 12, y: 26},
-            {pos: 'CDB', x: 26, y: 24},
-            {pos: 'CDB', x: 42, y: 24},
-            {pos: 'RDB', x: 56, y: 26},
-            {pos: 'LM', x: 18, y: 55},
-            {pos: 'CM', x: 34, y: 50},
-            {pos: 'RM', x: 50, y: 55},
-            {pos: 'LFW', x: 15, y: 78},
-            {pos: 'CF', x: 34, y: 80},
-            {pos: 'RFW', x: 53, y: 78}
-        ],
-        9: [
-            {pos: 'GK', x: 34, y: 6},
-            {pos: 'LDB', x: 15, y: 26},
-            {pos: 'CDB', x: 34, y: 24},
-            {pos: 'RDB', x: 53, y: 26},
-            {pos: 'CM', x: 24, y: 52},
-            {pos: 'CM', x: 44, y: 52},
-            {pos: 'LFW', x: 15, y: 78},
-            {pos: 'CF', x: 34, y: 80},
-            {pos: 'RFW', x: 53, y: 78}
-        ],
-        7: [
-            {pos: 'GK', x: 34, y: 6},
-            {pos: 'LDB', x: 22, y: 26},
-            {pos: 'RDB', x: 46, y: 26},
-            {pos: 'LM', x: 15, y: 55},
-            {pos: 'CM', x: 34, y: 52},
-            {pos: 'RM', x: 53, y: 55},
-            {pos: 'CF', x: 34, y: 80}
-        ]
-    };
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'white';
+    ctx.fillStyle = 'white';
+    ctx.lineWidth = 2;
 
-    let players = [];
-    let selectedPlayer = null;
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height / 2);
+    ctx.lineTo(canvas.width, canvas.height / 2);
+    ctx.stroke();
 
-    function updatePlayerPositionLabel(p) {
-        if (p.pos === 'GK') return;
-        let col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
-        let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height / 2, 9.15 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, 2 * Math.PI);
+    ctx.fill();
 
-        if (row === 'attacking') {
-            p.pos = col === 'left' ? 'LFW' : (col === 'center' ? 'CF' : 'RFW');
-        } else if (row === 'middle') {
-            p.pos = col === 'left' ? 'LM' : (col === 'center' ? 'CM' : 'RM');
-        } else if (row === 'defensive') {
-            p.pos = col === 'left' ? 'LDB' : (col === 'center' ? 'CDB' : 'RDB');
-        }
-    }
+    let boxWidthPx = 40.32 * scaleX;
+    let boxDepthPx = 16.5 * scaleY;
+    let boxX = (canvas.width - boxWidthPx) / 2;
+    let goalWidthPx = 18.32 * scaleX;
+    let goalDepthPx = 5.5 * scaleY;
+    let goalX = (canvas.width - goalWidthPx) / 2;
 
-    function drawPitch() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = 'white';
+    ctx.strokeRect(boxX, 0, boxWidthPx, boxDepthPx);
+    ctx.strokeRect(goalX, 0, goalWidthPx, goalDepthPx);
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, 11 * scaleY, 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    ctx.strokeRect(boxX, canvas.height - boxDepthPx, boxWidthPx, boxDepthPx);
+    ctx.strokeRect(goalX, canvas.height - goalDepthPx, goalWidthPx, goalDepthPx);
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height - (11 * scaleY), 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    currentPlayers.forEach(p => {
+        let px = p.x * scaleX;
+        let py = canvas.height - (p.y * scaleY);
+        ctx.beginPath();
+        ctx.arc(px, py, 16, 0, 2 * Math.PI);
         ctx.fillStyle = 'white';
+        ctx.fill();
         ctx.lineWidth = 2;
-
-        ctx.strokeRect(0, 0, canvas.width, canvas.height);
-        ctx.beginPath();
-        ctx.moveTo(0, canvas.height / 2);
-        ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.strokeStyle = 'black';
         ctx.stroke();
 
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, canvas.height / 2, 9.15 * scaleX, 0, 2 * Math.PI);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, 2 * Math.PI);
-        ctx.fill();
+        ctx.fillStyle = 'black';
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.pos, px, py);
+    });
+}
 
-        let boxWidthPx = 40.32 * scaleX;
-        let boxDepthPx = 16.5 * scaleY;
-        let boxX = (canvas.width - boxWidthPx) / 2;
-        let goalWidthPx = 18.32 * scaleX;
-        let goalDepthPx = 5.5 * scaleY;
-        let goalX = (canvas.width - goalWidthPx) / 2;
+function renderSoccerPitch(formatNum) {
+    const wrapper = document.getElementById('soccer-pitch-wrapper');
+    const label = document.getElementById('active-format-label');
+    if (!wrapper) return;
 
-        ctx.strokeRect(boxX, 0, boxWidthPx, boxDepthPx);
-        ctx.strokeRect(goalX, 0, goalWidthPx, goalDepthPx);
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, 11 * scaleY, 3, 0, 2 * Math.PI);
-        ctx.fill();
-
-        ctx.strokeRect(boxX, canvas.height - boxDepthPx, boxWidthPx, boxDepthPx);
-        ctx.strokeRect(goalX, canvas.height - goalDepthPx, goalWidthPx, goalDepthPx);
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, canvas.height - (11 * scaleY), 3, 0, 2 * Math.PI);
-        ctx.fill();
-
-        players.forEach(p => {
-            let px = p.x * scaleX;
-            let py = canvas.height - (p.y * scaleY);
-            ctx.beginPath();
-            ctx.arc(px, py, 16, 0, 2 * Math.PI);
-            ctx.fillStyle = 'white';
-            ctx.fill();
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = 'black';
-            ctx.stroke();
-
-            ctx.fillStyle = 'black';
-            ctx.font = 'bold 10px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(p.pos, px, py);
-        });
+    if ([7, 9, 11].includes(formatNum)) {
+        wrapper.style.display = 'block';
+        if (label) label.textContent = `${formatNum}v${formatNum}`;
+        currentPlayers = JSON.parse(JSON.stringify(baseFormations[formatNum]));
+        setTimeout(drawSoccerPitch, 50);
+    } else {
+        wrapper.style.display = 'none';
     }
+}
+
+// Drag & Drop handlers
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('soccerPitchCanvas');
+    if (!canvas) return;
+
+    const pitchWidth = 68;
+    const pitchLength = 105;
 
     function startDrag(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / pitchWidth;
+        const scaleY = canvas.height / pitchLength;
         const x = (clientX - rect.left) * (canvas.width / rect.width);
         const y = (clientY - rect.top) * (canvas.height / rect.height);
 
-        players.forEach(p => {
+        currentPlayers.forEach(p => {
             let px = p.x * scaleX;
             let py = canvas.height - (p.y * scaleY);
             if (Math.hypot(x - px, y - py) < 22) {
@@ -1793,6 +1804,8 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     function moveDrag(clientX, clientY) {
         if (!selectedPlayer) return;
         const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / pitchWidth;
+        const scaleY = canvas.height / pitchLength;
         const x = (clientX - rect.left) * (canvas.width / rect.width);
         const y = (clientY - rect.top) * (canvas.height / rect.height);
 
@@ -1800,7 +1813,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         selectedPlayer.y = Math.max(3, Math.min(pitchLength - 3, (canvas.height - y) / scaleY));
 
         updatePlayerPositionLabel(selectedPlayer);
-        drawPitch();
+        drawSoccerPitch();
     }
 
     canvas.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
@@ -1822,40 +1835,21 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     }, { passive: false });
 
     window.addEventListener('touchend', () => { selectedPlayer = null; });
-
-    window.updateSoccerPitchBoard = function(sport, formatStr) {
-        const wrapper = document.getElementById('soccer-pitch-wrapper');
-        const label = document.getElementById('active-format-label');
-        if (!wrapper) return;
-
-        const formatNum = parseInt(String(formatStr || '').replace(/[^0-9]/g, ''), 10);
-
-        if (String(sport).toLowerCase() === 'soccer' && [7, 9, 11].includes(formatNum)) {
-            wrapper.style.display = 'block';
-            if (label) label.textContent = `${formatNum}v${formatNum}`;
-            players = JSON.parse(JSON.stringify(baseFormations[formatNum]));
-            drawPitch();
-        } else {
-            wrapper.style.display = 'none';
-        }
-    };
-})();
+});
 
 let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
 let selectedFormatName = "{{ selected_format|safe }}" || "7v7"; 
 
 function selectSport(button, sportType) {
-    document.querySelectorAll('.sport-selector .btn-format').forEach(btn => {
-        btn.classList.remove('active');
-    });
+    document.querySelectorAll('.sport-selector .btn-format').forEach(btn => btn.classList.remove('active'));
     button.classList.add('active');
     selectedSportName = sportType;
-    selectedFormatName = sportType === 'soccer' ? '7v7' : '';
 
     const container = document.getElementById('matrix-format-container');
     container.innerHTML = '';
 
     if (sportType === 'soccer') {
+        selectedFormatName = '7v7';
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
@@ -1864,18 +1858,16 @@ function selectSport(button, sportType) {
                 <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
             </div>
         `;
-        if (window.updateSoccerPitchBoard) {
-            window.updateSoccerPitchBoard('soccer', '7v7');
-        }
+        renderSoccerPitch(7);
     } else {
-        if (window.updateSoccerPitchBoard) {
-            window.updateSoccerPitchBoard(sportType, '');
-        }
+        selectedFormatName = sportType === 'basketball' ? '5v5' : '6x6';
+        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
+        
         if (sportType === 'basketball') {
             container.innerHTML = `
                 <h3>1. Select Roster Matrix Format</h3>
                 <div class="format-selector">
-                    <button type="button" id="btn-5v5" class="btn-format" onclick="selectFormat(this, '5v5')">5v5</button>
+                    <button type="button" id="btn-5v5" class="btn-format active" onclick="selectFormat(this, '5v5')">5v5</button>
                     <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
                 </div>
             `;
@@ -1883,7 +1875,7 @@ function selectSport(button, sportType) {
             container.innerHTML = `
                 <h3>1. Select Roster Matrix Format</h3>
                 <div class="format-selector">
-                    <button type="button" id="btn-6x6" class="btn-format" onclick="selectFormat(this, '6x6')">6x6</button>
+                    <button type="button" id="btn-6x6" class="btn-format active" onclick="selectFormat(this, '6x6')">6x6</button>
                     <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
                 </div>
             `;
@@ -1904,9 +1896,14 @@ function selectFormat(clickedButton, formatValue) {
     }
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
-    if (window.updateSoccerPitchBoard) {
-        window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
+
+    const formatNum = parseInt(String(formatValue).replace(/[^0-9]/g, ''), 10);
+    if (selectedSportName === 'soccer' && [7, 9, 11].includes(formatNum)) {
+        renderSoccerPitch(formatNum);
+    } else {
+        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
     }
+
     fetch('/create-lineup/select-format', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
@@ -1915,7 +1912,7 @@ function selectFormat(clickedButton, formatValue) {
 }
 
 async function runTacticalPrompt() {
-    if (!selectedFormatName) return alert("Please choose a lineup layout metric variant layout format."); 
+    if (!selectedFormatName) return alert("Please choose a lineup layout format."); 
     const runButton = document.getElementById('execute-btn'); 
     const spinner = document.getElementById('loading-spinner'); 
     const responseAnchor = document.getElementById('response-anchor'); 
@@ -1954,33 +1951,13 @@ function clearBlueprintFrame() {
     }); 
 } 
 
-function syncPitchFromActiveButtons() {
-    const activeFormatBtn = document.querySelector('#matrix-format-container button.active, .format-selector button.active:not(#btn-soccer):not(#btn-basketball):not(#btn-volleyball)');
-    const activeSportBtn = document.querySelector('.sport-selector button.active');
-    
-    const sport = activeSportBtn ? activeSportBtn.textContent.trim().toLowerCase() : (selectedSportName || 'soccer');
-    const format = activeFormatBtn ? activeFormatBtn.textContent.trim().toLowerCase() : (selectedFormatName || '7v7');
-
-    if (window.updateSoccerPitchBoard) {
-        window.updateSoccerPitchBoard(sport, format);
-    }
-}
-
-const matrixContainer = document.getElementById('matrix-format-container');
-if (matrixContainer) {
-    matrixContainer.addEventListener('click', () => {
-        setTimeout(syncPitchFromActiveButtons, 20);
-    });
-}
-
-document.addEventListener('DOMContentLoaded', syncPitchFromActiveButtons);
+// Initial render trigger on page load
 window.addEventListener('load', () => {
-    syncPitchFromActiveButtons();
-    if (window.updateSoccerPitchBoard) {
-        window.updateSoccerPitchBoard('soccer', '7v7');
+    if (selectedSportName === 'soccer') {
+        const fNum = parseInt(String(selectedFormatName).replace(/[^0-9]/g, ''), 10) || 7;
+        renderSoccerPitch(fNum);
     }
 });
-setTimeout(syncPitchFromActiveButtons, 50);
 </script>
 </body> 
 </html>"""
