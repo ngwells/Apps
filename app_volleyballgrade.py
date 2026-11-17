@@ -1707,7 +1707,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 
     function updatePlayerPositionLabel(p) {
         if (p.pos === 'GK') return;
-
         let col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
         let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
 
@@ -1722,7 +1721,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 
     function drawPitch() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         ctx.strokeStyle = 'white';
         ctx.fillStyle = 'white';
         ctx.lineWidth = 2;
@@ -1736,7 +1734,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         ctx.beginPath();
         ctx.arc(canvas.width / 2, canvas.height / 2, 9.15 * scaleX, 0, 2 * Math.PI);
         ctx.stroke();
-
         ctx.beginPath();
         ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, 2 * Math.PI);
         ctx.fill();
@@ -1744,7 +1741,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         let boxWidthPx = 40.32 * scaleX;
         let boxDepthPx = 16.5 * scaleY;
         let boxX = (canvas.width - boxWidthPx) / 2;
-
         let goalWidthPx = 18.32 * scaleX;
         let goalDepthPx = 5.5 * scaleY;
         let goalX = (canvas.width - goalWidthPx) / 2;
@@ -1764,7 +1760,6 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         players.forEach(p => {
             let px = p.x * scaleX;
             let py = canvas.height - (p.y * scaleY);
-
             ctx.beginPath();
             ctx.arc(px, py, 16, 0, 2 * Math.PI);
             ctx.fillStyle = 'white';
@@ -1847,7 +1842,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
 })();
 
 let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
-let selectedFormatName = "{{ selected_format|safe }}" || "11v11"; 
+let selectedFormatName = "{{ selected_format|safe }}" || "7v7"; 
 
 function selectSport(button, sportType) {
     document.querySelectorAll('.sport-selector .btn-format').forEach(btn => {
@@ -1855,7 +1850,7 @@ function selectSport(button, sportType) {
     });
     button.classList.add('active');
     selectedSportName = sportType;
-    selectedFormatName = sportType === 'soccer' ? '11v11' : '';
+    selectedFormatName = sportType === 'soccer' ? '7v7' : '';
 
     const container = document.getElementById('matrix-format-container');
     container.innerHTML = '';
@@ -1864,13 +1859,13 @@ function selectSport(button, sportType) {
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-7v7" class="btn-format" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-7v7" class="btn-format active" onclick="selectFormat(this, '7v7')">7v7</button>
                 <button type="button" id="btn-9v9" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
-                <button type="button" id="btn-11v11" class="btn-format active" onclick="selectFormat(this, '11v11')">11v11</button>
+                <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
             </div>
         `;
         if (window.updateSoccerPitchBoard) {
-            window.updateSoccerPitchBoard('soccer', '11v11');
+            window.updateSoccerPitchBoard('soccer', '7v7');
         }
     } else {
         if (window.updateSoccerPitchBoard) {
@@ -1960,26 +1955,32 @@ function clearBlueprintFrame() {
 } 
 
 function syncPitchFromActiveButtons() {
-    const activeBtns = Array.from(document.querySelectorAll('button.active')).map(b => b.textContent.trim().toLowerCase());
-    const sport = activeBtns.find(t => ['soccer', 'basketball', 'volleyball'].includes(t)) || String(selectedSportName || 'soccer').toLowerCase();
-    const format = activeBtns.find(t => ['7v7', '9v9', '11v11'].includes(t)) || String(selectedFormatName || '11v11').toLowerCase();
+    const activeFormatBtn = document.querySelector('#matrix-format-container button.active, .format-selector button.active:not(#btn-soccer):not(#btn-basketball):not(#btn-volleyball)');
+    const activeSportBtn = document.querySelector('.sport-selector button.active');
+    
+    const sport = activeSportBtn ? activeSportBtn.textContent.trim().toLowerCase() : (selectedSportName || 'soccer');
+    const format = activeFormatBtn ? activeFormatBtn.textContent.trim().toLowerCase() : (selectedFormatName || '7v7');
 
     if (window.updateSoccerPitchBoard) {
         window.updateSoccerPitchBoard(sport, format);
     }
 }
 
-document.addEventListener('click', (e) => {
-    if (e.target && e.target.classList && e.target.classList.contains('btn-format')) {
-        setTimeout(syncPitchFromActiveButtons, 10);
+const matrixContainer = document.getElementById('matrix-format-container');
+if (matrixContainer) {
+    matrixContainer.addEventListener('click', () => {
+        setTimeout(syncPitchFromActiveButtons, 20);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', syncPitchFromActiveButtons);
+window.addEventListener('load', () => {
+    syncPitchFromActiveButtons();
+    if (window.updateSoccerPitchBoard) {
+        window.updateSoccerPitchBoard('soccer', '7v7');
     }
 });
-
-// Initial render trigger on page load
-if (!selectedFormatName && selectedSportName === 'soccer') {
-    selectedFormatName = '11v11';
-}
-syncPitchFromActiveButtons();
+setTimeout(syncPitchFromActiveButtons, 50);
 </script>
 </body> 
 </html>"""
