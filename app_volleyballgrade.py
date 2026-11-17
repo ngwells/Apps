@@ -688,6 +688,22 @@ def clear_blueprint():
     cache.delete('cached_blueprint')
     return jsonify({"status": "success"})
 
+
+
+
+SOCCER_POSITION_NAMES = {
+    'GK': 'Goalkeeper',
+    'LDB': 'Left Defender Back',
+    'CDB': 'Center Defender Back/Libero',
+    'RDB': 'Right Defender Back',
+    'LM': 'Left Midfielder',
+    'CM': 'Center Midfielder/Attacking Midfielder/Sweeper',
+    'RM': 'Right Midfielder',
+    'LFW': 'Left Forward/Left Winger',
+    'CF': 'Center Forward/Striker/false 9 ',
+    'RFW': 'Right Forward/Right Winger'
+}
+
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
     if "user_id" not in session:
@@ -698,14 +714,29 @@ def generate_tactics():
     req_body = request.get_json() or {}
     sport = req_body.get("sport") or cache.get('selected_sport') or "Soccer"
     format_type = req_body.get("format_type") or cache.get('selected_format') or "11v11"
-    active_board_players = req_body.get("board_players", []) # Captured from canvas state
+    active_board_players = req_body.get("board_players", [])
     
     cache.set('selected_sport', sport)
     cache.set('selected_format', format_type)
     
+    # --- Translate Abbreviations to Full Names & Format for Prompt ---
+    position_context_str = ""
+    board_summary_html = ""
+    
+    if active_board_players and str(sport).lower() == 'soccer':
+        raw_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
+        full_names = [SOCCER_POSITION_NAMES.get(code, code) for code in raw_codes]
+        
+        if full_names:
+            # Weave into prompt instruction
+            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(full_names)}."
+            # For the separate display table
+            board_summary_html = " → ".join(full_names)
+
     positions_count = format_type.split("v")[0] if format_type and "v" in format_type else "standard"
     
-    prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation. 
+    # Inject position_context_str dynamically for soccer, leaving other sports untouched
+    prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation.{position_context_str} 
 Each item in the list must be an object with two keys: "Position" and "Description". 
 For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, and key technical skills based on all-time great players for that position. 
 Output ONLY a valid JSON array."""
@@ -794,21 +825,6 @@ Output ONLY a valid JSON array."""
             )
             
         html_table = df_output.to_html(classes='table', index=False)
-        
-        # --- Build Separate Active Soccer Board Position Summary ---
-        board_summary_html = ""
-        if active_board_players and str(sport).lower() == 'soccer':
-            pos_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
-            if pos_codes:
-                board_summary_html = f"""
-                <div style="margin-top: 20px; padding: 15px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px;">
-                    <h4 style="margin-top: 0; color: #2e7d32;">Active Tactical Board Layout ({format_type})</h4>
-                    <p style="margin: 0; font-family: monospace; font-weight: bold; color: #1b5e20; font-size: 15px;">
-                        {" → ".join(pos_codes)}
-                    </p>
-                </div>
-                """
-        
         cache.set('cached_blueprint', html_table)
         
         return jsonify({
@@ -819,84 +835,8 @@ Output ONLY a valid JSON array."""
     except Exception as e:
         print(f"generate_tactics parsing error: {str(e)}")
         return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)} "}), 500
-    
-    import time
-    api_response = None
-    for attempt in range(3):
-        try:
-            api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
-            if api_response.status_code == 429:
-                time.sleep(2 ** attempt)
-                continue
-            break
-        except Exception as e:
-            if attempt == 2:
-                return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
-            time.sleep(1 + attempt)
-            
-    if not api_response or api_response.status_code != 200:
-        err_msg = api_response.text if api_response else "No response received"
-        return jsonify({"status": "error", "message": f"Mistral API error: {err_msg}"}), 500
-        
-    try:
-        data = api_response.json()
-        raw_content = data['choices'][0]['message']['content'].strip()
-        
-        if "```" in raw_content:
-            raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
-            raw_content = re.sub(r"\s*```$", "", raw_content)
-            raw_content = raw_content.strip()
-            
-        raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
-        
-        try:
-            parsed_json = json.loads(raw_content)
-        except json.JSONDecodeError as jde:
-            match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
-            if match:
-                cleaned_match = match.group(1)
-                cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
-                cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
-                cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
-                try:
-                    parsed_json = json.loads(cleaned_match)
-                except Exception:
-                    safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
-                    parsed_json = json.loads(safe_match)
-            else:
-                raise jde
-        
-        if isinstance(parsed_json, dict):
-            parsed_list = []
-            for k, v in parsed_json.items():
-                if isinstance(v, list):
-                    parsed_list.extend(v)
-                elif isinstance(v, dict):
-                    parsed_list.append(v)
-                else:
-                    parsed_list.append({"Position": k, "Description": str(v)})
-            if not parsed_list:
-                parsed_list = [parsed_json]
-        elif isinstance(parsed_json, list):
-            parsed_list = parsed_json
-        else:
-            parsed_list = [{"Position": "Overview", "Description": str(parsed_json)}]
-            
-        df_output = pd.DataFrame(parsed_list)
-        if len(df_output.columns) >= 2:
-            df_output = df_output.iloc[:, :2]
-            df_output.columns = ['Position', 'Narrative Description Summary']
-            df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
-                lambda x: " ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
-            )
-            
-        html_table = df_output.to_html(classes='table', index=False)
-        cache.set('cached_blueprint', html_table)
-        
-        return jsonify({"status": "success", "html_payload": html_table})
-    except Exception as e:
-        print(f"generate_tactics parsing error: {str(e)}")
-        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)} "}), 500
+
+
 
 @app.route("/analytics")
 def analytics():
