@@ -1966,9 +1966,25 @@ function clearBlueprintFrame() {
         } 
     }); 
 } 
-if (window.updateSoccerPitchBoard) {
-    window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
+function syncPitchFromActiveButtons() {
+    const activeSportBtn = document.querySelector('.sport-selector .btn-format.active');
+    const activeFormatBtn = document.querySelector('#matrix-format-container .btn-format.active');
+    const sport = activeSportBtn ? activeSportBtn.textContent.trim().toLowerCase() : selectedSportName;
+    const format = activeFormatBtn ? activeFormatBtn.textContent.trim().toLowerCase() : selectedFormatName;
+    if (window.updateSoccerPitchBoard) {
+        window.updateSoccerPitchBoard(sport, format);
+    }
 }
+
+// Re-sync whenever any format button is clicked
+document.getElementById('matrix-format-container').addEventListener('click', (e) => {
+    if (e.target && e.target.classList.contains('btn-format')) {
+        setTimeout(syncPitchFromActiveButtons, 10);
+    }
+});
+
+// Run immediately on page load so pre-selected Soccer + 11v11 renders right away
+syncPitchFromActiveButtons();
 </script> 
 </body> 
 </html>"""
