@@ -1783,8 +1783,9 @@ function autoSyncPitch() {
     
     if (sportName === 'soccer') {
         const activeFormat = document.querySelector('#matrix-format-container .btn-format.active');
-        const formatText = activeFormat ? activeFormat.textContent.trim() : '7v7';
-        const formatNum = parseInt(formatText.replace(/[^0-9]/g, ''), 10) || 7;
+        const formatText = activeFormat ? activeFormat.textContent.trim() : (selectedFormatName || '7v7');
+        const match = formatText.match(/7|9|11/);
+        const formatNum = match ? parseInt(match[0], 10) : 7;
         renderSoccerPitch(formatNum);
     } else {
         document.getElementById('soccer-pitch-wrapper').style.display = 'none';
@@ -1863,21 +1864,26 @@ function selectSport(button, sportType) {
     container.innerHTML = '';
 
     if (sportType === 'soccer') {
-        selectedFormatName = '7v7';
+        // Preserve previous format if valid, otherwise default to 7v7
+        if (!['7v7', '9v9', '11v11'].includes(selectedFormatName)) {
+            selectedFormatName = '7v7';
+        }
+        
         container.innerHTML = `
             <h3>1. Select Roster Matrix Format</h3>
             <div class="format-selector">
-                <button type="button" id="btn-7v7" class="btn-format active" onclick="selectFormat(this, '7v7')">7v7</button>
-                <button type="button" id="btn-9v9" class="btn-format" onclick="selectFormat(this, '9v9')">9v9</button>
-                <button type="button" id="btn-11v11" class="btn-format" onclick="selectFormat(this, '11v11')">11v11</button>
+                <button type="button" id="btn-7v7" class="btn-format ${selectedFormatName === '7v7' ? 'active' : ''}" onclick="selectFormat(this, '7v7')">7v7</button>
+                <button type="button" id="btn-9v9" class="btn-format ${selectedFormatName === '9v9' ? 'active' : ''}" onclick="selectFormat(this, '9v9')">9v9</button>
+                <button type="button" id="btn-11v11" class="btn-format ${selectedFormatName === '11v11' ? 'active' : ''}" onclick="selectFormat(this, '11v11')">11v11</button>
             </div>
         `;
-        renderSoccerPitch(7);
+        const match = selectedFormatName.match(/7|9|11/);
+        renderSoccerPitch(match ? parseInt(match[0], 10) : 7);
     } else {
-        selectedFormatName = '';
         document.getElementById('soccer-pitch-wrapper').style.display = 'none';
         
         if (sportType === 'basketball') {
+            selectedFormatName = '5v5';
             container.innerHTML = `
                 <h3>1. Select Roster Matrix Format</h3>
                 <div class="format-selector">
@@ -1886,6 +1892,7 @@ function selectSport(button, sportType) {
                 </div>
             `;
         } else if (sportType === 'volleyball') {
+            selectedFormatName = '6x6';
             container.innerHTML = `
                 <h3>1. Select Roster Matrix Format</h3>
                 <div class="format-selector">
@@ -1911,9 +1918,9 @@ function selectFormat(clickedButton, formatValue) {
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
 
-    const formatNum = parseInt(String(formatValue).replace(/[^0-9]/g, ''), 10);
-    if (selectedSportName === 'soccer' && [7, 9, 11].includes(formatNum)) {
-        renderSoccerPitch(formatNum);
+    const match = String(formatValue).match(/7|9|11/);
+    if (selectedSportName === 'soccer' && match) {
+        renderSoccerPitch(parseInt(match[0], 10));
     } else {
         document.getElementById('soccer-pitch-wrapper').style.display = 'none';
     }
@@ -1968,7 +1975,8 @@ function clearBlueprintFrame() {
 window.addEventListener('DOMContentLoaded', autoSyncPitch);
 window.addEventListener('load', autoSyncPitch);
 setTimeout(autoSyncPitch, 50);
-</script></body> 
+</script>
+</body> 
 </html>"""
 
 ANALYTICS_PAGE_HTML = """<!DOCTYPE html> 
