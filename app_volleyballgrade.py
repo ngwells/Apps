@@ -1770,10 +1770,24 @@ function renderSoccerPitch(formatNum) {
     if ([7, 9, 11].includes(formatNum)) {
         wrapper.style.display = 'block';
         if (label) label.textContent = `${formatNum}v${formatNum}`;
-        currentPlayers = JSON.parse(JSON.stringify(baseFormations[formatNum]));
-        setTimeout(drawSoccerPitch, 50);
+        currentPlayers = JSON.parse(JSON.stringify(baseFormations[formatNum] || baseFormations[7]));
+        setTimeout(drawSoccerPitch, 30);
     } else {
         wrapper.style.display = 'none';
+    }
+}
+
+function autoSyncPitch() {
+    const activeSport = document.querySelector('.sport-selector .btn-format.active');
+    const sportName = activeSport ? activeSport.textContent.trim().toLowerCase() : 'soccer';
+    
+    if (sportName === 'soccer') {
+        const activeFormat = document.querySelector('#matrix-format-container .btn-format.active');
+        const formatText = activeFormat ? activeFormat.textContent.trim() : '7v7';
+        const formatNum = parseInt(formatText.replace(/[^0-9]/g, ''), 10) || 7;
+        renderSoccerPitch(formatNum);
+    } else {
+        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
     }
 }
 
@@ -1860,7 +1874,7 @@ function selectSport(button, sportType) {
         `;
         renderSoccerPitch(7);
     } else {
-        selectedFormatName = sportType === 'basketball' ? '5v5' : '6x6';
+        selectedFormatName = '';
         document.getElementById('soccer-pitch-wrapper').style.display = 'none';
         
         if (sportType === 'basketball') {
@@ -1951,15 +1965,10 @@ function clearBlueprintFrame() {
     }); 
 } 
 
-// Initial render trigger on page load
-window.addEventListener('load', () => {
-    if (selectedSportName === 'soccer') {
-        const fNum = parseInt(String(selectedFormatName).replace(/[^0-9]/g, ''), 10) || 7;
-        renderSoccerPitch(fNum);
-    }
-});
-</script>
-</body> 
+window.addEventListener('DOMContentLoaded', autoSyncPitch);
+window.addEventListener('load', autoSyncPitch);
+setTimeout(autoSyncPitch, 50);
+</script></body> 
 </html>"""
 
 ANALYTICS_PAGE_HTML = """<!DOCTYPE html> 
