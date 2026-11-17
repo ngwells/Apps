@@ -1621,7 +1621,17 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             </div>
         {% endif %}
     </div>
+    
+    <!-- Interactive Soccer Formation Board -->
+    <div id="soccer-pitch-wrapper" style="display: none; margin: 20px auto; text-align: center;">
+        <div class="tactical-container" style="background-color: #2b2b2b; color: white; font-family: Arial, sans-serif; text-align: center; padding: 15px; border-radius: 8px; display: inline-block; max-width: 100%;">
+            <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-format-label">11v11</span>)</h3>
+            <p style="font-size: 13px; color: #ccc;">Click and drag any player position. Labels update dynamically based on field zones!</p>
+            <canvas id="soccerPitchCanvas" width="400" height="617" style="background-color: #2d6a30; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+        </div>
+    </div>
 
+    
     <div class="btn-group"> 
         <button type="button" id="execute-btn" class="btn-execute" onclick="runTacticalPrompt()">Execute Blueprint Generation</button> 
         <button type="button" id="clear-btn" class="btn-clear-frame" onclick="clearBlueprintFrame()">Clear Frame</button> 
@@ -1647,6 +1657,215 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
     </div> 
 </div> 
 <script> 
+
+(function() {
+    const canvas = document.getElementById('soccerPitchCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const pitchWidth = 68;
+    const pitchLength = 105;
+    const scaleX = canvas.width / pitchWidth;
+    const scaleY = canvas.height / pitchLength;
+
+    const baseFormations = {
+        11: [ // 4-3-3
+            {pos: 'GK', x: 34, y: 6},
+            {pos: 'LDB', x: 12, y: 26},
+            {pos: 'CDB', x: 26, y: 24},
+            {pos: 'CDB', x: 42, y: 24},
+            {pos: 'RDB', x: 56, y: 26},
+            {pos: 'LM', x: 18, y: 55},
+            {pos: 'CM', x: 34, y: 50},
+            {pos: 'RM', x: 50, y: 55},
+            {pos: 'LFW', x: 15, y: 78},
+            {pos: 'CF', x: 34, y: 80},
+            {pos: 'RFW', x: 53, y: 78}
+        ],
+        9: [ // 3-2-3
+            {pos: 'GK', x: 34, y: 6},
+            {pos: 'LDB', x: 15, y: 26},
+            {pos: 'CDB', x: 34, y: 24},
+            {pos: 'RDB', x: 53, y: 26},
+            {pos: 'CM', x: 24, y: 52},
+            {pos: 'CM', x: 44, y: 52},
+            {pos: 'LFW', x: 15, y: 78},
+            {pos: 'CF', x: 34, y: 80},
+            {pos: 'RFW', x: 53, y: 78}
+        ],
+        7: [ // 2-3-1
+            {pos: 'GK', x: 34, y: 6},
+            {pos: 'LDB', x: 22, y: 26},
+            {pos: 'RDB', x: 46, y: 26},
+            {pos: 'LM', x: 15, y: 55},
+            {pos: 'CM', x: 34, y: 52},
+            {pos: 'RM', x: 53, y: 55},
+            {pos: 'CF', x: 34, y: 80}
+        ]
+    };
+
+    let players = [];
+    let selectedPlayer = null;
+
+    function updatePlayerPositionLabel(p) {
+        if (p.pos === 'GK') return;
+
+        let col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
+        let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
+
+        if (row === 'attacking') {
+            if (col === 'left') p.pos = 'LFW';
+            else if (col === 'center') p.pos = 'CF';
+            else if (col === 'right') p.pos = 'RFW';
+        } else if (row === 'middle') {
+            if (col === 'left') p.pos = 'LM';
+            else if (col === 'center') p.pos = 'CM';
+            else if (col === 'right') p.pos = 'RM';
+        } else if (row === 'defensive') {
+            if (col === 'left') p.pos = 'LDB';
+            else if (col === 'center') p.pos = 'CDB';
+            else if (col === 'right') p.pos = 'RDB';
+        }
+    }
+
+    function drawPitch() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.strokeStyle = 'white';
+        ctx.fillStyle = 'white';
+        ctx.lineWidth = 2;
+
+        // 1. Outer boundary
+        ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+        // 2. Halfway line
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height / 2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.stroke();
+
+        // 3. Center circle & spot
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, 9.15 * scaleX, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // 4. Penalty & Goal Areas
+        let boxWidthPx = 40.32 * scaleX;
+        let boxDepthPx = 16.5 * scaleY;
+        let boxX = (canvas.width - boxWidthPx) / 2;
+
+        let goalWidthPx = 18.32 * scaleX;
+        let goalDepthPx = 5.5 * scaleY;
+        let goalX = (canvas.width - goalWidthPx) / 2;
+
+        // Bottom boxes
+        ctx.strokeRect(boxX, 0, boxWidthPx, boxDepthPx);
+        ctx.strokeRect(goalX, 0, goalWidthPx, goalDepthPx);
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, 11 * scaleY, 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Top boxes
+        ctx.strokeRect(boxX, canvas.height - boxDepthPx, boxWidthPx, boxDepthPx);
+        ctx.strokeRect(goalX, canvas.height - goalDepthPx, goalWidthPx, goalDepthPx);
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height - (11 * scaleY), 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // 5. Draw players
+        players.forEach(p => {
+            let px = p.x * scaleX;
+            let py = canvas.height - (p.y * scaleY);
+
+            ctx.beginPath();
+            ctx.arc(px, py, 16, 0, 2 * Math.PI);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'black';
+            ctx.stroke();
+
+            ctx.fillStyle = 'black';
+            ctx.font = 'bold 10px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.pos, px, py);
+        });
+    }
+
+    function startDrag(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (clientX - rect.left) * (canvas.width / rect.width);
+        const y = (clientY - rect.top) * (canvas.height / rect.height);
+
+        players.forEach(p => {
+            let px = p.x * scaleX;
+            let py = canvas.height - (p.y * scaleY);
+            if (Math.hypot(x - px, y - py) < 22) {
+                selectedPlayer = p;
+            }
+        });
+    }
+
+    function moveDrag(clientX, clientY) {
+        if (!selectedPlayer) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (clientX - rect.left) * (canvas.width / rect.width);
+        const y = (clientY - rect.top) * (canvas.height / rect.height);
+
+        selectedPlayer.x = Math.max(3, Math.min(pitchWidth - 3, x / scaleX));
+        selectedPlayer.y = Math.max(3, Math.min(pitchLength - 3, (canvas.height - y) / scaleY));
+
+        updatePlayerPositionLabel(selectedPlayer);
+        drawPitch();
+    }
+
+    canvas.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
+    canvas.addEventListener('mousemove', (e) => moveDrag(e.clientX, e.clientY));
+    window.addEventListener('mouseup', () => { selectedPlayer = null; });
+
+    canvas.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            startDrag(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1) {
+            moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => { selectedPlayer = null; });
+
+    // Global hook triggered whenever Sport or Matrix Format changes
+    window.updateSoccerPitchBoard = function(sport, formatStr) {
+        const wrapper = document.getElementById('soccer-pitch-wrapper');
+        const label = document.getElementById('active-format-label');
+        if (!wrapper) return;
+
+        // Parse 7 from '7v7', 9 from '9v9', or 11 from '11v11'
+        const formatNum = parseInt(String(formatStr || '').replace(/[^0-9]/g, ''), 10);
+
+        if (String(sport).toLowerCase() === 'soccer' && [7, 9, 11].includes(formatNum)) {
+            wrapper.style.display = 'block';
+            if (label) label.textContent = `${formatNum}v${formatNum}`;
+            // Deep clone so dragging resets cleanly when switching formats
+            players = JSON.parse(JSON.stringify(baseFormations[formatNum]));
+            drawPitch();
+        } else {
+            wrapper.style.display = 'none';
+        }
+    };
+})();
+
+
 let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
 let selectedFormatName = "{{ selected_format|safe }}"; 
 
@@ -1656,7 +1875,10 @@ function selectSport(button, sportType) {
     });
     button.classList.add('active');
     selectedSportName = sportType;
-
+    selectedFormatName = '';
+    if (window.updateSoccerPitchBoard) {
+        window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
+    }
     const container = document.getElementById('matrix-format-container');
     container.innerHTML = '';
 
@@ -1699,6 +1921,9 @@ function selectFormat(clickedButton, formatValue) {
     parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active')); 
     clickedButton.classList.add('active'); 
     selectedFormatName = formatValue; 
+    if (window.updateSoccerPitchBoard) {
+        window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
+    }
     fetch('/create-lineup/select-format', {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format_type: formatValue }) }); 
 }
 
@@ -1741,6 +1966,9 @@ function clearBlueprintFrame() {
         } 
     }); 
 } 
+if (window.updateSoccerPitchBoard) {
+    window.updateSoccerPitchBoard(selectedSportName, selectedFormatName);
+}
 </script> 
 </body> 
 </html>"""
