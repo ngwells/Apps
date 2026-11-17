@@ -813,6 +813,7 @@ def analytics():
     processed_table = pd.DataFrame(processed_session).to_html(classes='table', index=False) if processed_session else None
     uploaded_table = pd.DataFrame(uploaded_session).to_html(classes='table', index=False) if uploaded_session else None
     similarity_results_table = cache.get('similarity_results_html')
+    position_rankings_json = cache.get('position_rankings_json')
     
     barchart_data = cache.get('barchart_data')
     wordcloud_data = cache.get('wordcloud_data')
@@ -827,6 +828,7 @@ def analytics():
         blueprint_table=blueprint_table,
         was_overridden=was_overridden,
         similarity_results_table=similarity_results_table,
+        position_rankings_json=position_rankings_json,
         barchart_data_json=barchart_data_json,
         wordcloud_data=wordcloud_data,
         sankey_json=sankey_json
@@ -836,6 +838,7 @@ def analytics():
 def clear_metrics_dataframe():
     if "user_id" not in session: return redirect(url_for("login"))
     cache.delete('similarity_results_html')
+    cache.delete('position_rankings_json')
     cache.delete('barchart_data')
     cache.delete('wordcloud_data')
     cache.delete('sankey_json')
@@ -952,6 +955,14 @@ def compute_metrics():
         results_df.sort_values(by=["Position", "Confidence Score"], ascending=[True, False], inplace=True)
         results_df = results_df[["Position", "Confidence Score", "Player"]]
         cache.set('similarity_results_html', results_df.to_html(classes='table', index=False))
+        
+        position_rankings = {}
+        for pos, group in results_df.groupby("Position", sort=False):
+            position_rankings[pos] = [
+                {"player": str(row["Player"]), "score": round(float(row["Confidence Score"]), 4)}
+                for _, row in group.iterrows()
+            ]
+        cache.set('position_rankings_json', json.dumps(position_rankings))
         
         all_players = list(results_df['Player'].unique())
         all_positions = list(results_df['Position'].unique())
@@ -1774,26 +1785,166 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </div> 
     </div> 
     
-    {% if similarity_results_table %} 
-    <div class="section-box" style="border-left: 4px solid #2e7d32; background: #fbfdfb;"> 
-        <h3 style="color:#2e7d32;">🎯 Top Position Fit Recommendations</h3> 
-        <div class="table-wrap"> 
-            {{ similarity_results_table|safe }} 
-        </div> 
-    </div> 
-    {% endif %} 
-
-    {% if sankey_json %}
-    <div class="section-box" style="border-left: 4px solid #17a2b8; height: auto; overflow: visible; margin-bottom: 24px;">
-        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3>
-        <div id="sankey-chart-container" style="width: 100%; height: auto; min-height: 950px;"></div>
-        <script>
-            const sankeyData = {{ sankey_json|safe }};
-            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true});
-        </script>
-    </div>
-    {% endif %}
+    {% if position_rankings_json %}
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     
+    <div class="section-box" style="border-left: 4px solid #10b981; background: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.05);">
+        <!-- Header & Slide Controls -->
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px;">
+            <div>
+                <h3 style="color: #0f172a; margin: 0; font-size: 1.35rem;">🎯 Position Fit Intelligence Deck</h3>
+                <p style="color: #64748b; margin: 4px 0 0 0; font-size: 0.9rem;">Sorted by Confidence Score per position • Filter candidates or export position slides</p>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="prevSlide()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; font-weight: 600;">◀ Prev</button>
+                <span id="slide-counter" style="font-size: 0.9rem; font-weight: 600; color: #334155; min-width: 70px; text-align: center;">1 / 1</span>
+                <button onclick="nextSlide()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; font-weight: 600;">Next ▶</button>
+                <button onclick="exportCurrentSlide()" style="padding: 8px 16px; border-radius: 8px; border: none; background: #10b981; color: white; cursor: pointer; font-weight: 600;">📸 Export Position Slide</button>
+            </div>
+        </div>
+    
+        <!-- Position Pill Selector -->
+        <div id="position-pills" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px;"></div>
+    
+        <!-- Filter Bar -->
+        <div style="display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: #f8fafc; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+            <input type="text" id="player-search" placeholder="🔍 Filter by Player (e.g., Player 20)..." oninput="renderSlide()"
+                   style="flex: 1; min-width: 200px; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.92rem;">
+            
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <label for="min-score-slider" style="font-size: 0.9rem; font-weight: 600; color: #334155;">Min Confidence:</label>
+                <input type="range" id="min-score-slider" min="0.50" max="0.90" step="0.01" value="0.65" oninput="updateScoreLabel(); renderSlide();">
+                <span id="min-score-val" style="font-weight: 700; color: #0f766e; min-width: 45px;">0.65</span>
+            </div>
+    
+            <label style="font-size: 0.9rem; color: #334155; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="checkbox" id="top-n-toggle" onchange="renderSlide()"> Top 10 Only
+            </label>
+        </div>
+    
+        <!-- Exportable Position Slide Canvas -->
+        <div id="position-slide-card" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; border-radius: 14px; padding: 28px; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 16px; margin-bottom: 20px;">
+                <div>
+                    <span style="text-transform: uppercase; letter-spacing: 1.5px; font-size: 0.75rem; color: #38bdf8; font-weight: 700;">Position Depth Chart</span>
+                    <h2 id="slide-position-title" style="margin: 4px 0 0 0; font-size: 1.65rem; color: #ffffff;">Position Name</h2>
+                </div>
+                <div style="text-align: right;">
+                    <span id="slide-candidate-count" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;">0 Candidates</span>
+                </div>
+            </div>
+    
+            <!-- Ranked Candidate Bars -->
+            <div id="slide-rankings-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 540px; overflow-y: auto; padding-right: 6px;"></div>
+        </div>
+    </div>
+    
+    <script>
+        const positionRankings = {{ position_rankings_json|safe }};
+        const positions = Object.keys(positionRankings);
+        let currentSlideIdx = 0;
+    
+        function updateScoreLabel() {
+            document.getElementById('min-score-val').textContent = parseFloat(document.getElementById('min-score-slider').value).toFixed(2);
+        }
+    
+        function renderPills() {
+            const pillContainer = document.getElementById('position-pills');
+            pillContainer.innerHTML = '';
+            positions.forEach((pos, idx) => {
+                const btn = document.createElement('button');
+                btn.textContent = pos;
+                const isActive = idx === currentSlideIdx;
+                btn.style.cssText = `
+                    padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
+                    border: 1px solid ${isActive ? '#0f172a' : '#cbd5e1'};
+                    background: ${isActive ? '#0f172a' : '#ffffff'};
+                    color: ${isActive ? '#ffffff' : '#334155'};
+                `;
+                btn.onclick = () => { currentSlideIdx = idx; renderPills(); renderSlide(); };
+                pillContainer.appendChild(btn);
+            });
+        }
+    
+        function renderSlide() {
+            if (!positions.length) return;
+            const pos = positions[currentSlideIdx];
+            const query = document.getElementById('player-search').value.trim().toLowerCase();
+            const minScore = parseFloat(document.getElementById('min-score-slider').value);
+            const topOnly = document.getElementById('top-n-toggle').checked;
+    
+            document.getElementById('slide-position-title').textContent = pos;
+            document.getElementById('slide-counter').textContent = `${currentSlideIdx + 1} / ${positions.length}`;
+    
+            // Ensure sorted descending by confidence score
+            let candidates = [...positionRankings[pos]].sort((a, b) => b.score - a.score);
+    
+            // Apply filters
+            candidates = candidates.filter(c =>
+                c.score >= minScore &&
+                (!query || c.player.toLowerCase().includes(query))
+            );
+            if (topOnly) candidates = candidates.slice(0, 10);
+    
+            document.getElementById('slide-candidate-count').textContent = `${candidates.length} Matching Players`;
+    
+            const listEl = document.getElementById('slide-rankings-list');
+            listEl.innerHTML = '';
+    
+            if (!candidates.length) {
+                listEl.innerHTML = `<div style="text-align:center; padding: 32px; color: #94a3b8;">No players match the current filter threshold.</div>`;
+                return;
+            }
+    
+            candidates.forEach((item, rankIdx) => {
+                const pct = Math.min(100, Math.max(0, (item.score * 100))).toFixed(1);
+                const tierColor = item.score >= 0.80 ? '#10b981' : (item.score >= 0.75 ? '#38bdf8' : '#94a3b8');
+                const row = document.createElement('div');
+                row.style.cssText = `
+                    display: grid; grid-template-columns: 42px 160px 1fr 75px; align-items: center; gap: 12px;
+                    background: rgba(255, 255, 255, 0.05); padding: 10px 14px; border-radius: 10px;
+                    border-left: 4px solid ${tierColor};
+                `;
+                row.innerHTML = `
+                    <span style="font-weight: 800; color: ${tierColor}; font-size: 0.95rem;">#${rankIdx + 1}</span>
+                    <span style="font-weight: 600; color: #f1f5f9; font-size: 0.95rem;">${item.player}</span>
+                    <div style="background: rgba(255,255,255,0.1); height: 10px; border-radius: 999px; overflow: hidden;">
+                        <div style="width: ${pct}%; height: 100%; background: ${tierColor}; border-radius: 999px;"></div>
+                    </div>
+                    <span style="font-family: monospace; font-weight: 700; font-size: 0.95rem; text-align: right; color: #ffffff;">${item.score.toFixed(4)}</span>
+                `;
+                listEl.appendChild(row);
+            });
+        }
+    
+        function prevSlide() {
+            currentSlideIdx = (currentSlideIdx - 1 + positions.length) % positions.length;
+            renderPills();
+            renderSlide();
+        }
+    
+        function nextSlide() {
+            currentSlideIdx = (currentSlideIdx + 1) % positions.length;
+            renderPills();
+            renderSlide();
+        }
+    
+        function exportCurrentSlide() {
+            const card = document.getElementById('position-slide-card');
+            const posName = positions[currentSlideIdx].replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            html2canvas(card, { scale: 2, backgroundColor: '#0f172a' }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = `position_slide_${posName}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            });
+        }
+    
+        renderPills();
+        renderSlide();
+    </script>
+    {% endif %}
+        
     {% if barchart_data_json %} 
     <div class="section-box" style="border-left: 4px solid #17a2b8;"> 
         <h3 style="color:#17a2b8;">📈 Top 3 Candidate Comparisons</h3> 
@@ -1836,6 +1987,19 @@ ANALYTICS_PAGE_HTML = """<!DOCTYPE html>
         </script> 
     </div> 
     {% endif %} 
+     
+
+    {% if sankey_json %}
+    <div class="section-box" style="border-left: 4px solid #17a2b8; height: auto; overflow: visible; margin-bottom: 24px;">
+        <h3 style="color:#17a2b8;">🌊 Player-to-Position Flow Sankey</h3>
+        <div id="sankey-chart-container" style="width: 100%; height: auto; min-height: 950px;"></div>
+        <script>
+            const sankeyData = {{ sankey_json|safe }};
+            Plotly.newPlot('sankey-chart-container', sankeyData.data, sankeyData.layout, {responsive: true});
+        </script>
+    </div>
+    {% endif %}
+
     
     {% if wordcloud_data %} 
     <div class="section-box" style="border-left: 4px solid #9467bd;"> 
