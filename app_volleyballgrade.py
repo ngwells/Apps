@@ -723,25 +723,102 @@ Output ONLY a valid JSON array."""
         "temperature": 0.2
     }
     
-    # [Existing Mistral API Request & JSON Parsing Logic...]
-    # (Keep your existing API call and parsing code here)
-    
-    # After generating html_table, append the board position codes summary if available:
-    board_summary_html = ""
-    if active_board_players and str(sport).lower() == 'soccer':
-        pos_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
-        board_summary_html = f"""
-        <div style="margin-top: 15px; padding: 12px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 6px;">
-            <strong style="color: #2e7d32;">Active Tactical Board Layout ({format_type}):</strong>
-            <p style="margin: 5px 0 0 0; font-family: monospace; font-weight: bold; color: #1b5e20;">
-                {" → ".join(pos_codes)}
-            </p>
-        </div>
-        """
-    
-    final_payload_html = html_table + board_summary_html
-    cache.set('cached_blueprint', final_payload_html)
-    return jsonify({"status": "success", "html_payload": final_payload_html})
+    import time
+    api_response = None
+    for attempt in range(3):
+        try:
+            api_response = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
+            if api_response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            break
+        except Exception as e:
+            if attempt == 2:
+                return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)}"}), 500
+            time.sleep(1 + attempt)
+            
+    if not api_response or api_response.status_code != 200:
+        err_msg = api_response.text if api_response else "No response received"
+        return jsonify({"status": "error", "message": f"Mistral API error: {err_msg}"}), 500
+        
+    try:
+        data = api_response.json()
+        raw_content = data['choices'][0]['message']['content'].strip()
+        
+        if "```" in raw_content:
+            raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
+            raw_content = re.sub(r"\s*```$", "", raw_content)
+            raw_content = raw_content.strip()
+            
+        raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
+        
+        try:
+            parsed_json = json.loads(raw_content)
+        except json.JSONDecodeError as jde:
+            match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
+            if match:
+                cleaned_match = match.group(1)
+                cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
+                cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
+                cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
+                try:
+                    parsed_json = json.loads(cleaned_match)
+                except Exception:
+                    safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
+                    parsed_json = json.loads(safe_match)
+            else:
+                raise jde
+        
+        if isinstance(parsed_json, dict):
+            parsed_list = []
+            for k, v in parsed_json.items():
+                if isinstance(v, list):
+                    parsed_list.extend(v)
+                elif isinstance(v, dict):
+                    parsed_list.append(v)
+                else:
+                    parsed_list.append({"Position": k, "Description": str(v)})
+            if not parsed_list:
+                parsed_list = [parsed_json]
+        elif isinstance(parsed_json, list):
+            parsed_list = parsed_json
+        else:
+            parsed_list = [{"Position": "Overview", "Description": str(parsed_json)}]
+            
+        df_output = pd.DataFrame(parsed_list)
+        if len(df_output.columns) >= 2:
+            df_output = df_output.iloc[:, :2]
+            df_output.columns = ['Position', 'Narrative Description Summary']
+            df_output['Narrative Description Summary'] = df_output['Narrative Description Summary'].apply(
+                lambda x: " ".join(str(v) for v in x) if isinstance(x, (list, dict)) else str(x)
+            )
+            
+        html_table = df_output.to_html(classes='table', index=False)
+        
+        # --- Build Separate Active Soccer Board Position Summary ---
+        board_summary_html = ""
+        if active_board_players and str(sport).lower() == 'soccer':
+            pos_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
+            if pos_codes:
+                board_summary_html = f"""
+                <div style="margin-top: 20px; padding: 15px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px;">
+                    <h4 style="margin-top: 0; color: #2e7d32;">Active Tactical Board Layout ({format_type})</h4>
+                    <p style="margin: 0; font-family: monospace; font-weight: bold; color: #1b5e20; font-size: 15px;">
+                        {" → ".join(pos_codes)}
+                    </p>
+                </div>
+                """
+        
+        cache.set('cached_blueprint', html_table)
+        
+        return jsonify({
+            "status": "success", 
+            "html_payload": html_table,
+            "board_payload": board_summary_html
+        })
+    except Exception as e:
+        print(f"generate_tactics parsing error: {str(e)}")
+        return jsonify({"status": "error", "message": f"Pipeline failure: {str(e)} "}), 500
     
     import time
     api_response = None
