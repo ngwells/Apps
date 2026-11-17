@@ -742,15 +742,15 @@ def generate_tactics():
             processed_full_names.append(labeled_name)
             
         if processed_full_names:
-            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(processed_full_names)}. For duplicate position roles (like _1 and _2), detail their shared core traits as well as their distinct tactical responsibilities and differing traits."
+            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(processed_full_names)}. For duplicate position roles (like _1 and _2), detail their shared core traits as well as their distinct tactical responsibilities and differing traits. Determine if 1 is more offensive and attacking while others are more defensive"
             board_summary_html = " → ".join(processed_full_names)
 
     positions_count = format_type.split("v")[0] if format_type and "v" in format_type else "standard"
     
     prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation.{position_context_str} 
 Each item in the list must be an object with two keys: "Position" and "Description". 
-For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing characteristics, psychological traits, key technical skills, and where applicable, shared vs. differing traits for paired roles. 
-Output ONLY a valid JSON array."""
+For the "Description" field, aggregate 5 different scout perspectives (Tactical Analyst, Elite Coach, Veteran Scout, Sports Scientist, and Data Modeler) into a single, cohesive block of text detailing sport and position characteristics, psychological traits, key technical skills, and where applicable, shared vs. differing traits for paired and multiple roles. Compliment the roles with offensive and defensive traits and skills.  
+Output ONLY a valid JSON array. Do not use crazy and weird punctuation like @ and *"""
     
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -759,7 +759,7 @@ Output ONLY a valid JSON array."""
     payload = {
         "model": "ministral-3b-2512",
         "messages": [
-            {"role": "system", "content": "You are a lead sports data architect combining multi-scout evaluations. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary."},
+            {"role": "system", "content": "You are a lead sports data architect/general manager/coach combining multi-scout evaluations. Return ONLY a valid JSON array of objects with 'Position' and 'Description' keys. No markdown code blocks, no extra commentary. no weird characters like * or @"},
             {"role": "user", "content": prompt_instruction}
         ],
         "temperature": 0.2
