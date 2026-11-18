@@ -792,20 +792,25 @@ Output ONLY a valid JSON array. Do not use crazy and weird punctuation like @ an
             raw_content = re.sub(r"\s*```$", "", raw_content)
             raw_content = raw_content.strip()
             
+        # Clean common JSON syntax errors
         raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
         
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as jde:
+            # Fallback: Extract JSON array/object structure and repair common missing colons/quotes
             match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
             if match:
                 cleaned_match = match.group(1)
                 cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
                 cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
                 cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
+                # Fix missing colons between property names and values if present
+                cleaned_match = re.sub(r'"\s+"', '","', cleaned_match)
                 try:
                     parsed_json = json.loads(cleaned_match)
                 except Exception:
+                    # Last resort fallback: Convert single quotes to double quotes
                     safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
                     parsed_json = json.loads(safe_match)
             else:
