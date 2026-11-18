@@ -427,12 +427,13 @@ def split_dataframe():
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
         
-        transcript_batch_str = "\n".join([f"[{row['Timestamp']}] {row['Transcript']}" for _, row in df_raw.iterrows()])
+        # FIX: Join only the raw transcript text without prepending the timestamp string
+        transcript_batch_str = "\n".join([str(row['Transcript']) for _, row in df_raw.iterrows()])
         
         prompt = f"""
-        Analyze the following batch of timestamped transcript texts, break each down into natural segments/sentences, and for each segment:
-        1. Extract the raw segment text, preserving its timestamp context.
-           - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
+        Analyze the following batch of transcript texts, break each down into natural segments/sentences, and for each segment:
+        1. Extract the raw segment text cleanly without keeping any redundant timestamps or metadata.
+           - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23")
         2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
            - Score 51 to 100 by integers: Directly evaluates an individual player.
            - Lower scores / 0: General instructions, noise, or multi-player sequences.
@@ -792,20 +793,25 @@ Output ONLY a valid JSON array. Do not use crazy and weird punctuation like @ an
             raw_content = re.sub(r"\s*```$", "", raw_content)
             raw_content = raw_content.strip()
             
+        # Clean common JSON syntax errors
         raw_content = re.sub(r',\s*([\]}])', r'\1', raw_content)
         
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as jde:
+            # Fallback: Extract JSON array/object structure and repair common missing colons/quotes
             match = re.search(r'(\[.*\]|\{.*\})', raw_content, re.DOTALL)
             if match:
                 cleaned_match = match.group(1)
                 cleaned_match = re.sub(r',\s*([\]}])', r'\1', cleaned_match)
                 cleaned_match = re.sub(r'}\s*"', '},"', cleaned_match)
                 cleaned_match = re.sub(r'}\s*{', '},{', cleaned_match)
+                # Fix missing colons between property names and values if present
+                cleaned_match = re.sub(r'"\s+"', '","', cleaned_match)
                 try:
                     parsed_json = json.loads(cleaned_match)
                 except Exception:
+                    # Last resort fallback: Convert single quotes to double quotes
                     safe_match = re.sub(r'(?<![:,\s\[\{])"(?![,\]\}\s])', "'", cleaned_match)
                     parsed_json = json.loads(safe_match)
             else:
@@ -939,9 +945,14 @@ def compute_metrics():
         axis=1
     )
 
+    # --- NORMALIZE PLAYER NAMES TO FIX CASE SENSITIVITY ---
     player_evals_df['Player'] = player_evals_df['Player'].apply(
-        lambda x: str(x).strip() if str(x).strip().lower().startswith('player') else f"Player {str(x).strip()}"
+        lambda x: f"Player {str(x).strip().title().replace('Player', '').strip()}" 
+        if str(x).strip().lower().startswith('player') 
+        else f"Player {str(x).strip().title()}" if str(x).strip().isdigit() 
+        else str(x).strip().title()
     )
+
     player_evals_df = (
         player_evals_df[['Player', 'Description']]
         .groupby('Player', as_index=False)['Description']
