@@ -427,12 +427,13 @@ def split_dataframe():
         else:
             return jsonify({"status": "error", "message": "Invalid data format received."}), 400
         
-        transcript_batch_str = "\n".join([f"[{row['Timestamp']}] {row['Transcript']}" for _, row in df_raw.iterrows()])
+        # FIX: Join only the raw transcript text without prepending the timestamp string
+        transcript_batch_str = "\n".join([str(row['Transcript']) for _, row in df_raw.iterrows()])
         
         prompt = f"""
-        Analyze the following batch of timestamped transcript texts, break each down into natural segments/sentences, and for each segment:
-        1. Extract the raw segment text, preserving its timestamp context.
-           - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23", "45", "D12", "Player C86", "Number P456")
+        Analyze the following batch of transcript texts, break each down into natural segments/sentences, and for each segment:
+        1. Extract the raw segment text cleanly without keeping any redundant timestamps or metadata.
+           - the segment should have a subject (e.g., "Player 17", "Player 3", "Number 23")
         2. Assign a score from 100 to 0 based on how well it evaluates a specific individual player's trait/characteristic:
            - Score 51 to 100 by integers: Directly evaluates an individual player.
            - Lower scores / 0: General instructions, noise, or multi-player sequences.
