@@ -945,9 +945,14 @@ def compute_metrics():
         axis=1
     )
 
+    # --- NORMALIZE PLAYER NAMES TO FIX CASE SENSITIVITY ---
     player_evals_df['Player'] = player_evals_df['Player'].apply(
-        lambda x: str(x).strip() if str(x).strip().lower().startswith('player') else f"Player {str(x).strip()}"
+        lambda x: f"Player {str(x).strip().title().replace('Player', '').strip()}" 
+        if str(x).strip().lower().startswith('player') 
+        else f"Player {str(x).strip().title()}" if str(x).strip().isdigit() 
+        else str(x).strip().title()
     )
+
     player_evals_df = (
         player_evals_df[['Player', 'Description']]
         .groupby('Player', as_index=False)['Description']
