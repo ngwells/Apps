@@ -664,14 +664,32 @@ def create_lineup():
         blueprint_table=blueprint_table
     )
 
+VALID_SPORT_FORMATS = {
+    'soccer': {'7v7', '9v9', '11v11'},
+    'basketball': {'5v5', '3v3'},
+    'volleyball': {'6x6', '2v2'},
+}
+
+DEFAULT_SPORT_FORMATS = {
+    'soccer': '7v7',
+    'basketball': '5v5',
+    'volleyball': '6x6',
+}
+
 @app.route("/create-lineup/select-sport", methods=["POST"])
 def select_sport_sync():
     if "user_id" not in session:
         return redirect(url_for("login"))
-    req_body = request.get_json()
-    if req_body and 'sport_type' in req_body:
-        cache.set('selected_sport', req_body['sport_type'])
+    req_body = request.get_json(silent=True) or {}
+    if 'sport_type' in req_body:
+        sport_val = req_body['sport_type']
+        cache.set('selected_sport', sport_val)
+        sport_key = str(sport_val).strip().lower()
+        current_fmt = str(cache.get('selected_format') or '').strip().lower()
+        if sport_key in VALID_SPORT_FORMATS and current_fmt not in VALID_SPORT_FORMATS[sport_key]:
+            cache.set('selected_format', DEFAULT_SPORT_FORMATS[sport_key])
         return jsonify({"status": "sport_cached"})
+    return jsonify({"status": "no_sport_type"}), 400
 
 @app.route("/create-lineup/select-format", methods=["POST"])
 def select_format_sync():
@@ -692,6 +710,8 @@ def clear_blueprint():
 
 
 
+import time
+
 SOCCER_POSITION_NAMES = {
     'GK': 'Goalkeeper',
     'LDB': 'Left Defender Back',
@@ -704,6 +724,116 @@ SOCCER_POSITION_NAMES = {
     'CF': 'Center Forward/Striker/false 9 ',
     'RFW': 'Right Forward/Right Winger'
 }
+
+VOLLEYBALL_POSITION_NAMES = {
+    # 6v6 / 6x6 roles & aliases
+    'S': 'Setter (Front & Back)',
+    'SET': 'Setter (Front & Back)',
+    'OH': 'Outside Hitter (Front & Back)',
+    'MB': 'Middle Blocker (Front)',
+    'OPP': 'Opposite / Right-Side Hitter (Front & Back)',
+    'RS': 'Opposite / Right-Side Hitter (Front & Back)',
+    'L': 'Libero (Back Only)',
+    'LI': 'Libero (Back Only)',
+    'DS': 'Defensive Specialist (Back)',
+    # 2v2 side preferences
+    'R': 'Right Side (Serve-Receive / Attacking / Setting)',
+    'LS': 'Left Side (Serve-Receive / Attacking / Setting)'
+}
+
+BASKETBALL_POSITION_NAMES = {
+    # 5v5 standard roles
+    'PG': 'Point Guard (Primary Ball Handler / Playmaker / Perimeter)',
+    'SG': 'Shooting Guard (Perimeter Scorer / Spacer / Secondary Handler)',
+    'SF': 'Small Forward (Two-Way Wing / Slasher / Multi-Position Defender)',
+    'PF': 'Power Forward (Stretch Forward / Weak-Side Rebounder / Forward-Center)',
+    'C': 'Center (Rim Protector / Paint Anchor / Pick-and-Roll Finisher)',
+    # 3v3 half-court roles
+    'G': 'Guard (Perimeter Initiator / Spacer / Drive-and-Kick)',
+    'W': 'Wing (Cut / Corner Shooter / Switch Defender)',
+    'B': 'Big (Screen Setter / Paint Finisher / Rebounder)'
+}
+
+SPORT_POSITION_NAMES = {
+    'soccer': SOCCER_POSITION_NAMES,
+    'volleyball': VOLLEYBALL_POSITION_NAMES,
+    'basketball': BASKETBALL_POSITION_NAMES
+}
+
+
+def _extract_positions_count(format_type: str) -> str:
+    if not format_type:
+        return "standard"
+    fmt = str(format_type).strip().lower()
+    for sep in ("v", "x"):
+        if sep in fmt:
+            prefix = fmt.split(sep, 1)[0].strip()
+            if prefix.isdigit():
+                return prefix
+    return "standard"
+
+
+def _build_board_position_context(sport_key: str, active_board_players: list) -> tuple[str, str]:
+    pos_map = SPORT_POSITION_NAMES.get(sport_key)
+    if not pos_map or not active_board_players:
+        return "", ""
+
+    raw_items = []
+    for p in active_board_players:
+        if isinstance(p, dict) and p.get('pos'):
+            raw_items.append((str(p.get('pos')).strip(), p.get('zone')))
+
+    if not raw_items:
+        return "", ""
+
+    raw_codes = [code for code, _ in raw_items]
+    seen_counts = {}
+    processed_full_names = []
+    summary_items = []
+
+    for code, zone in raw_items:
+        base_name = pos_map.get(code, code)
+        seen_counts[code] = seen_counts.get(code, 0) + 1
+
+        if seen_counts[code] > 1 or raw_codes.count(code) > 1:
+            labeled_name = f"{base_name} _{seen_counts[code]}"
+        else:
+            labeled_name = base_name
+
+        processed_full_names.append(labeled_name)
+        if sport_key in ('volleyball', 'basketball') and zone is not None:
+            summary_items.append(f"{labeled_name} [Z{zone}]")
+        else:
+            summary_items.append(labeled_name)
+
+    if sport_key == 'soccer':
+        context_str = (
+            f" Specifically, base the positions on this exact tactical board layout: "
+            f"{', '.join(processed_full_names)}. For duplicate position roles (like _1 and _2), "
+            f"detail their shared core traits as well as their distinct tactical responsibilities and "
+            f"differing traits. Determine if 1 is more offensive and attacking while others are more defensive"
+        )
+    elif sport_key == 'volleyball':
+        context_str = (
+            f" Specifically, base the positions on this exact volleyball court layout: "
+            f"{', '.join(summary_items)}. For duplicate position roles (like _1 and _2) or "
+            f"multi-zone/side designations, detail their shared core traits as well as their "
+            f"distinct rotational, front-row vs. back-row, attacking/blocking, serve-receive, "
+            f"and defensive responsibilities."
+        )
+    elif sport_key == 'basketball':
+        context_str = (
+            f" Specifically, base the positions on this exact basketball court layout: "
+            f"{', '.join(summary_items)}. For duplicate position roles (like _1 and _2) or "
+            f"zone/spacing roles, detail their shared core traits as well as their distinct "
+            f"perimeter vs. paint spacing, pick-and-roll/off-ball action, rebounding, transition, "
+            f"and on/off-ball defensive responsibilities."
+        )
+    else:
+        context_str = f" Specifically, base the positions on this layout: {', '.join(processed_full_names)}."
+
+    return context_str, " → ".join(summary_items)
+
 
 @app.route("/create-lineup/generate-tactics", methods=["POST"])
 def generate_tactics():
@@ -721,32 +851,12 @@ def generate_tactics():
     cache.set('selected_format', format_type)
     
     # --- Process Positions & Handle Duplicate Suffixes (_1, _2) ---
-    position_context_str = ""
-    board_summary_html = ""
-    
-    if active_board_players and str(sport).lower() == 'soccer':
-        raw_codes = [p.get('pos', '') for p in active_board_players if p.get('pos')]
-        
-        # Count occurrences to assign _1, _2 suffix when duplicated
-        seen_counts = {}
-        processed_full_names = []
-        
-        for code in raw_codes:
-            base_name = SOCCER_POSITION_NAMES.get(code, code)
-            seen_counts[code] = seen_counts.get(code, 0) + 1
-            
-            if seen_counts[code] > 1 or raw_codes.count(code) > 1:
-                labeled_name = f"{base_name} _{seen_counts[code]}"
-            else:
-                labeled_name = base_name
-                
-            processed_full_names.append(labeled_name)
-            
-        if processed_full_names:
-            position_context_str = f" Specifically, base the positions on this exact tactical board layout: {', '.join(processed_full_names)}. For duplicate position roles (like _1 and _2), detail their shared core traits as well as their distinct tactical responsibilities and differing traits. Determine if 1 is more offensive and attacking while others are more defensive"
-            board_summary_html = " → ".join(processed_full_names)
+    sport_key = str(sport).strip().lower()
+    position_context_str, board_summary_html = _build_board_position_context(
+        sport_key, active_board_players
+    )
 
-    positions_count = format_type.split("v")[0] if format_type and "v" in format_type else "standard"
+    positions_count = _extract_positions_count(format_type)
     
     prompt_instruction = f"""Generate a JSON list of exactly {positions_count} positions for a {sport} team playing a {format_type} formation.{position_context_str} 
 Each item in the list must be an object with two keys: "Position" and "Description". 
@@ -766,7 +876,6 @@ Output ONLY a valid JSON array. Do not use crazy and weird punctuation like @ an
         "temperature": 0.2
     }
     
-    import time
     api_response = None
     for attempt in range(3):
         try:
@@ -1646,6 +1755,9 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
  .llm-response-box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin-top: 20px; min-height: 100px; } 
  .debug-panel { background: #f1f3f5; border-radius: 8px; padding: 15px; font-size: 12px; margin-top: 30px; } 
  .loader { display: none; text-align: center; font-weight: bold; color: #666; margin: 20px 0; } 
+ .tactical-container { background-color: #2b2b2b; color: white; font-family: Arial, sans-serif; text-align: center; padding: 15px; border-radius: 8px; display: inline-block; max-width: 100%; }
+ .tactical-hint { font-size: 13px; color: #ccc; }
+ .board-wrapper { display: none; margin: 20px auto; text-align: center; }
 </style> 
 </head> 
 <body> 
@@ -1661,21 +1773,35 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         <button type="button" id="btn-volleyball" class="btn-format {% if selected_sport == 'volleyball' %}active{% endif %}" onclick="selectSport(this, 'volleyball')">Volleyball</button>
     </div>
 
-    <div id="matrix-format-container">
-        <h3>1. Select Roster Matrix Format</h3>
-        <div class="format-selector">
-            <button type="button" id="btn-7v7" class="btn-format {% if selected_format == '7v7' or not selected_format %}active{% endif %}" onclick="selectFormat(this, '7v7')">7v7</button>
-            <button type="button" id="btn-9v9" class="btn-format {% if selected_format == '9v9' %}active{% endif %}" onclick="selectFormat(this, '9v9')">9v9</button>
-            <button type="button" id="btn-11v11" class="btn-format {% if selected_format == '11v11' %}active{% endif %}" onclick="selectFormat(this, '11v11')">11v11</button>
-        </div>
-    </div>
+    <div id="matrix-format-container"></div>
     
-    <!-- Interactive Soccer Formation Board -->
-    <div id="soccer-pitch-wrapper" style="display: block; margin: 20px auto; text-align: center;">
-        <div class="tactical-container" style="background-color: #2b2b2b; color: white; font-family: Arial, sans-serif; text-align: center; padding: 15px; border-radius: 8px; display: inline-block; max-width: 100%;">
-            <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-format-label">7v7</span>)</h3>
-            <p style="font-size: 13px; color: #ccc;">Click and drag any player position. Labels update dynamically based on field zones!</p>
-            <canvas id="soccerPitchCanvas" width="400" height="617" style="background-color: #2d6a30; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+    <!-- Interactive Tactical Boards Container -->
+    <div id="tactical-boards-stage">
+        <!-- Interactive Soccer Formation Board -->
+        <div id="soccer-pitch-wrapper" class="board-wrapper" style="display: block;">
+            <div class="tactical-container">
+                <h3 style="margin-top: 0;">Interactive Soccer Formation Board (<span id="active-soccer-format-label">7v7</span>)</h3>
+                <p class="tactical-hint">Click and drag any player position. Labels update dynamically based on field zones!</p>
+                <canvas id="soccerPitchCanvas" width="400" height="617" style="background-color: #2d6a30; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+            </div>
+        </div>
+
+        <!-- Interactive Volleyball Court Board -->
+        <div id="volleyball-court-wrapper" class="board-wrapper">
+            <div class="tactical-container">
+                <h3 style="margin-top: 0;">Interactive Volleyball Court Board (<span id="active-volleyball-format-label">6x6</span>)</h3>
+                <p class="tactical-hint">Click and drag any player across the 6 bottom-half court zones. Labels update dynamically by zone/side!</p>
+                <canvas id="volleyballCourtCanvas" width="400" height="667" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+            </div>
+        </div>
+
+        <!-- Interactive Full-Court Basketball Board -->
+        <div id="basketball-court-wrapper" class="board-wrapper">
+            <div class="tactical-container">
+                <h3 style="margin-top: 0;">Interactive Basketball Full Court Board (<span id="active-basketball-format-label">5v5</span>)</h3>
+                <p class="tactical-hint">Click and drag any player anywhere across the full court. Labels update dynamically by court zone & spacing!</p>
+                <canvas id="basketballCourtCanvas" width="400" height="747" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+            </div>
         </div>
     </div>
     
@@ -1723,66 +1849,235 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
         </ul> 
     </div> 
 </div> 
-<script> 
-const baseFormations = {
-    11: [
-        {pos: 'GK', x: 34, y: 6},
-        {pos: 'LDB', x: 12, y: 26},
-        {pos: 'CDB', x: 26, y: 24},
-        {pos: 'CDB', x: 42, y: 24},
-        {pos: 'RDB', x: 56, y: 26},
-        {pos: 'LM', x: 18, y: 55},
-        {pos: 'CM', x: 34, y: 50},
-        {pos: 'RM', x: 50, y: 55},
-        {pos: 'LFW', x: 15, y: 78},
-        {pos: 'CF', x: 34, y: 80},
-        {pos: 'RFW', x: 53, y: 78}
-    ],
-    9: [
-        {pos: 'GK', x: 34, y: 6},
-        {pos: 'LDB', x: 15, y: 26},
-        {pos: 'CDB', x: 34, y: 24},
-        {pos: 'RDB', x: 53, y: 26},
-        {pos: 'CM', x: 24, y: 52},
-        {pos: 'CM', x: 44, y: 52},
-        {pos: 'LFW', x: 15, y: 78},
-        {pos: 'CF', x: 34, y: 80},
-        {pos: 'RFW', x: 53, y: 78}
-    ],
-    7: [
-        {pos: 'GK', x: 34, y: 6},
-        {pos: 'LDB', x: 22, y: 26},
-        {pos: 'RDB', x: 46, y: 26},
-        {pos: 'LM', x: 15, y: 55},
-        {pos: 'CM', x: 34, y: 52},
-        {pos: 'RM', x: 53, y: 55},
-        {pos: 'CF', x: 34, y: 80}
-    ]
+<script>
+const SPORT_FORMATS = {
+    soccer: {
+        options: ['7v7', '9v9', '11v11'],
+        defaultFormat: '7v7',
+        wrapperId: 'soccer-pitch-wrapper',
+        labelId: 'active-soccer-format-label',
+        canvasId: 'soccerPitchCanvas',
+        dimensions: { width: 68, length: 105 },
+        formations: {
+            11: [
+                {pos: 'GK', x: 34, y: 6, locked: true},
+                {pos: 'LDB', x: 12, y: 26},
+                {pos: 'CDB', x: 26, y: 24},
+                {pos: 'CDB', x: 42, y: 24},
+                {pos: 'RDB', x: 56, y: 26},
+                {pos: 'LM', x: 18, y: 55},
+                {pos: 'CM', x: 34, y: 50},
+                {pos: 'RM', x: 50, y: 55},
+                {pos: 'LFW', x: 15, y: 78},
+                {pos: 'CF', x: 34, y: 80},
+                {pos: 'RFW', x: 53, y: 78}
+            ],
+            9: [
+                {pos: 'GK', x: 34, y: 6, locked: true},
+                {pos: 'LDB', x: 15, y: 26},
+                {pos: 'CDB', x: 34, y: 24},
+                {pos: 'RDB', x: 53, y: 26},
+                {pos: 'CM', x: 24, y: 52},
+                {pos: 'CM', x: 44, y: 52},
+                {pos: 'LFW', x: 15, y: 78},
+                {pos: 'CF', x: 34, y: 80},
+                {pos: 'RFW', x: 53, y: 78}
+            ],
+            7: [
+                {pos: 'GK', x: 34, y: 6, locked: true},
+                {pos: 'LDB', x: 22, y: 26},
+                {pos: 'RDB', x: 46, y: 26},
+                {pos: 'LM', x: 15, y: 55},
+                {pos: 'CM', x: 34, y: 52},
+                {pos: 'RM', x: 53, y: 55},
+                {pos: 'CF', x: 34, y: 80}
+            ]
+        }
+    },
+    volleyball: {
+        options: ['6x6', '2v2'],
+        defaultFormat: '6x6',
+        wrapperId: 'volleyball-court-wrapper',
+        labelId: 'active-volleyball-format-label',
+        canvasId: 'volleyballCourtCanvas',
+        dimensions: { width: 9.0, length: 18.0 },
+        formations: {
+            '6x6': [
+                // Front row (near net at y=9, bottom half y=0..9): L->R in court coords is Zone 4, Zone 3, Zone 2
+                {pos: 'OH', x: 2.25, y: 7.2, zone: 4},
+                {pos: 'MB', x: 4.50, y: 7.2, zone: 3},
+                {pos: 'S',  x: 6.75, y: 7.2, zone: 2},
+                // Back row (bottom half y=0..4.5): L->R in court coords is Zone 5, Zone 6, Zone 1
+                {pos: 'DS',  x: 2.25, y: 2.5, zone: 5},
+                {pos: 'L',   x: 4.50, y: 2.5, zone: 6, locked: true},
+                {pos: 'OPP', x: 6.75, y: 2.5, zone: 1}
+            ],
+            '2v2': [
+                {pos: 'L', x: 2.5, y: 5.2, zone: 4},
+                {pos: 'R', x: 6.5, y: 5.2, zone: 2}
+            ]
+        }
+    },
+    basketball: {
+        options: ['5v5', '3v3'],
+        defaultFormat: '5v5',
+        wrapperId: 'basketball-court-wrapper',
+        labelId: 'active-basketball-format-label',
+        canvasId: 'basketballCourtCanvas',
+        // Full court coordinate system: width 15.0m (x: 0..15), length 28.0m (y: 0 = bottom baseline, y: 28 = top baseline)
+        dimensions: { width: 15.0, length: 28.0 },
+        formations: {
+            '5v5': [
+                {pos: 'PG', x: 7.5,  y: 12.2, zone: 3},
+                {pos: 'SG', x: 12.6, y: 9.0,  zone: 5},
+                {pos: 'SF', x: 2.4,  y: 8.8,  zone: 4},
+                {pos: 'PF', x: 10.2, y: 4.2,  zone: 2},
+                {pos: 'C',  x: 6.2,  y: 2.8,  zone: 1}
+            ],
+            '3v3': [
+                {pos: 'G', x: 7.5,  y: 11.5, zone: 3},
+                {pos: 'W', x: 12.5, y: 6.5,  zone: 5},
+                {pos: 'B', x: 6.0,  y: 3.0,  zone: 1}
+            ]
+        }
+    }
 };
 
 let currentPlayers = [];
 let selectedPlayer = null;
+let activeBoardSport = null;
+let activeBoardFormat = null;
+let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
+let selectedFormatName = "{{ selected_format|safe }}" || "7v7";
 
-function updatePlayerPositionLabel(p) {
-    if (p.pos === 'GK') return;
-    let col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
-    let row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
+function hideAllBoards() {
+    document.querySelectorAll('.board-wrapper').forEach(el => {
+        el.style.display = 'none';
+    });
+}
 
-    if (row === 'attacking') {
-        p.pos = col === 'left' ? 'LFW' : (col === 'center' ? 'CF' : 'RFW');
-    } else if (row === 'middle') {
-        p.pos = col === 'left' ? 'LM' : (col === 'center' ? 'CM' : 'RM');
-    } else if (row === 'defensive') {
-        p.pos = col === 'left' ? 'LDB' : (col === 'center' ? 'CDB' : 'RDB');
+function renderFormatButtons(sportType, activeFormat) {
+    const container = document.getElementById('matrix-format-container');
+    const sportCfg = SPORT_FORMATS[sportType];
+    if (!container || !sportCfg) return;
+
+    const validFormat = sportCfg.options.includes(activeFormat) ? activeFormat : sportCfg.defaultFormat;
+    selectedFormatName = validFormat;
+
+    const buttonsHtml = sportCfg.options.map(fmt => {
+        const safeId = `btn-${fmt.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+        const activeClass = fmt === validFormat ? 'active' : '';
+        return `<button type="button" id="${safeId}" class="btn-format ${activeClass}" onclick="selectFormat(this, '${fmt}')">${fmt}</button>`;
+    }).join('');
+
+    container.innerHTML = `
+        <h3>1. Select Roster Matrix Format</h3>
+        <div class="format-selector">${buttonsHtml}</div>
+    `;
+}
+
+function computeVolleyballZone(x, y) {
+    // 6 zones on bottom half (0 <= y <= 9):
+    // Front half (y > 4.5): 4 (left), 3 (center), 2 (right)
+    // Back half (y <= 4.5): 5 (left), 6 (center), 1 (right)
+    const isFront = y > 4.5;
+    if (x < 3.0) return isFront ? 4 : 5;
+    if (x < 6.0) return isFront ? 3 : 6;
+    return isFront ? 2 : 1;
+}
+
+function computeBasketballZone(x, y) {
+    // 5 unrendered tactical zones across full court (width 15m, length 28m):
+    // Z1: Lower Paint / Rim Zone (y <= 6.5, 5.0 <= x <= 10.0)
+    // Z2: Upper Paint / Rim Zone (y >= 21.5, 5.0 <= x <= 10.0)
+    // Z3: Midcourt / Transition Hub (10.0 < y < 18.0, 4.5 <= x <= 10.5)
+    // Z4: Left Wing / Perimeter Flank (x < 5.0)
+    // Z5: Right Wing / Perimeter Flank (x >= 10.0)
+    if (y <= 6.5 && x >= 5.0 && x <= 10.0) return 1;
+    if (y >= 21.5 && x >= 5.0 && x <= 10.0) return 2;
+    if (x < 5.0) return 4;
+    if (x >= 10.0) return 5;
+    return 3;
+}
+
+function updatePlayerPositionLabel(p, sportType, formatType) {
+    if (!p || p.locked) return;
+
+    if (sportType === 'soccer') {
+        if (p.pos === 'GK') return;
+        const col = p.x <= 22.66 ? 'left' : (p.x <= 45.33 ? 'center' : 'right');
+        const row = p.y <= 35 ? 'defensive' : (p.y <= 70 ? 'middle' : 'attacking');
+
+        if (row === 'attacking') {
+            p.pos = col === 'left' ? 'LFW' : (col === 'center' ? 'CF' : 'RFW');
+        } else if (row === 'middle') {
+            p.pos = col === 'left' ? 'LM' : (col === 'center' ? 'CM' : 'RM');
+        } else if (row === 'defensive') {
+            p.pos = col === 'left' ? 'LDB' : (col === 'center' ? 'CDB' : 'RDB');
+        }
+        return;
+    }
+
+    if (sportType === 'volleyball') {
+        const zone = computeVolleyballZone(p.x, p.y);
+        p.zone = zone;
+
+        if (formatType === '2v2') {
+            p.pos = p.x < 4.5 ? 'L' : 'R';
+            return;
+        }
+
+        // 6x6 dynamic role assignment based on front/back row and left/center/right zone
+        const isFront = yIsFrontRowVolleyball(p.y);
+        const col = p.x < 3.0 ? 'left' : (p.x < 6.0 ? 'center' : 'right');
+
+        if (isFront) {
+            if (col === 'left') p.pos = 'OH';
+            else if (col === 'center') p.pos = 'MB';
+            else p.pos = 'S';
+        } else {
+            if (col === 'left') p.pos = 'DS';
+            else if (col === 'center') p.pos = 'L';
+            else p.pos = 'OPP';
+        }
+        return;
+    }
+
+    if (sportType === 'basketball') {
+        const zone = computeBasketballZone(p.x, p.y);
+        p.zone = zone;
+
+        // Distance from nearest baseline (0m or 28m) so both halves map symmetrically
+        const distToBaseline = Math.min(p.y, 28.0 - p.y);
+
+        if (formatType === '3v3') {
+            if (distToBaseline <= 5.2 && p.x >= 4.8 && p.x <= 10.2) p.pos = 'B';
+            else if (p.x < 4.8 || p.x > 10.2) p.pos = 'W';
+            else p.pos = 'G';
+            return;
+        }
+
+        // 5v5 dynamic role assignment across full court
+        if (distToBaseline <= 4.6) {
+            p.pos = (p.x >= 5.2 && p.x <= 9.8) ? 'C' : 'PF';
+        } else if (distToBaseline <= 9.5) {
+            p.pos = (p.x < 5.2) ? 'SF' : (p.x > 9.8 ? 'SG' : 'PF');
+        } else {
+            p.pos = (p.x >= 4.5 && p.x <= 10.5) ? 'PG' : (p.x < 4.5 ? 'SF' : 'SG');
+        }
     }
 }
 
+function yIsFrontRowVolleyball(y) {
+    return y > 4.5;
+}
+
 function drawSoccerPitch() {
-    const canvas = document.getElementById('soccerPitchCanvas');
+    const cfg = SPORT_FORMATS.soccer;
+    const canvas = document.getElementById(cfg.canvasId);
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const pitchWidth = 68;
-    const pitchLength = 105;
+    const { width: pitchWidth, length: pitchLength } = cfg.dimensions;
     const scaleX = canvas.width / pitchWidth;
     const scaleY = canvas.height / pitchLength;
 
@@ -1823,12 +2118,263 @@ function drawSoccerPitch() {
     ctx.arc(canvas.width / 2, canvas.height - (11 * scaleY), 3, 0, 2 * Math.PI);
     ctx.fill();
 
+    drawPlayerBadges(ctx, canvas, scaleX, scaleY);
+}
+
+function drawHardwoodFloor(ctx, width, height) {
+    // Reused warm maple/oak hardwood gradient & plank detailing
+    const baseGrad = ctx.createLinearGradient(0, 0, width, height);
+    baseGrad.addColorStop(0, '#d89b5c');
+    baseGrad.addColorStop(0.5, '#c88a4b');
+    baseGrad.addColorStop(1, '#b8783b');
+    ctx.fillStyle = baseGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    const plankCount = 18;
+    const plankWidth = width / plankCount;
+    for (let i = 0; i < plankCount; i++) {
+        const px = i * plankWidth;
+        ctx.fillStyle = i % 2 === 0
+            ? 'rgba(255, 232, 196, 0.07)'
+            : 'rgba(92, 50, 16, 0.06)';
+        ctx.fillRect(px, 0, plankWidth, height);
+
+        ctx.strokeStyle = 'rgba(110, 62, 22, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, height);
+        ctx.stroke();
+
+        const jointY = ((i * 73) % Math.max(120, height - 60)) + 30;
+        ctx.beginPath();
+        ctx.moveTo(px, jointY);
+        ctx.lineTo(px + plankWidth, jointY);
+        ctx.stroke();
+    }
+}
+
+function drawVolleyballCourt() {
+    const cfg = SPORT_FORMATS.volleyball;
+    const canvas = document.getElementById(cfg.canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { width: courtWidth, length: courtLength } = cfg.dimensions;
+    const scaleX = canvas.width / courtWidth;
+    const scaleY = canvas.height / courtLength;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Hardwood court floor
+    drawHardwoodFloor(ctx, canvas.width, canvas.height);
+
+    // Highlight active bottom half (0..9m) and 6 zones
+    const colWidthPx = 3.0 * scaleX;
+    const rowHeightPx = 4.5 * scaleY;
+
+    const zonesGrid = [
+        [
+            { z: 4, x0: 0, yTop: canvas.height - 9.0 * scaleY, w: colWidthPx, h: rowHeightPx },
+            { z: 3, x0: colWidthPx, yTop: canvas.height - 9.0 * scaleY, w: colWidthPx, h: rowHeightPx },
+            { z: 2, x0: colWidthPx * 2, yTop: canvas.height - 9.0 * scaleY, w: colWidthPx, h: rowHeightPx }
+        ],
+        [
+            { z: 5, x0: 0, yTop: canvas.height - 4.5 * scaleY, w: colWidthPx, h: rowHeightPx },
+            { z: 6, x0: colWidthPx, yTop: canvas.height - 4.5 * scaleY, w: colWidthPx, h: rowHeightPx },
+            { z: 1, x0: colWidthPx * 2, yTop: canvas.height - 4.5 * scaleY, w: colWidthPx, h: rowHeightPx }
+        ]
+    ];
+
+    zonesGrid.flat().forEach((zoneBox, idx) => {
+        ctx.save();
+        ctx.fillStyle = idx % 2 === 0 ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
+        ctx.fillRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+        ctx.font = 'bold 11px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`Z${zoneBox.z}`, zoneBox.x0 + 6, zoneBox.yTop + 5);
+        ctx.restore();
+    });
+
+    // Outer boundary (9m x 18m)
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    // Attack lines at y = 6.0 and y = 12.0 (3m from center line)
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 1.5;
+    [6.0, 12.0].forEach(yMeter => {
+        const yPx = canvas.height - (yMeter * scaleY);
+        ctx.beginPath();
+        ctx.moveTo(0, yPx);
+        ctx.lineTo(canvas.width, yPx);
+        ctx.stroke();
+    });
+    ctx.restore();
+
+    // Center line & Net at y = 9.0
+    const centerYPx = canvas.height - (9.0 * scaleY);
+    ctx.save();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, centerYPx);
+    ctx.lineTo(canvas.width, centerYPx);
+    ctx.stroke();
+
+    const netHeightPx = 10;
+    const netTopPx = centerYPx - (netHeightPx / 2);
+
+    ctx.fillStyle = 'rgba(25, 25, 25, 0.45)';
+    ctx.fillRect(0, netTopPx, canvas.width, netHeightPx);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 1;
+    for (let x = 8; x < canvas.width; x += 8) {
+        ctx.beginPath();
+        ctx.moveTo(x, netTopPx);
+        ctx.lineTo(x, netTopPx + netHeightPx);
+        ctx.stroke();
+    }
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, netTopPx);
+    ctx.lineTo(canvas.width, netTopPx);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#111111';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, netTopPx + netHeightPx);
+    ctx.lineTo(canvas.width, netTopPx + netHeightPx);
+    ctx.stroke();
+
+    ctx.fillStyle = '#222222';
+    ctx.fillRect(0, centerYPx - 9, 6, 18);
+    ctx.fillRect(canvas.width - 6, centerYPx - 9, 6, 18);
+    ctx.restore();
+
+    drawPlayerBadges(ctx, canvas, scaleX, scaleY);
+}
+
+function drawBasketballCourt() {
+    const cfg = SPORT_FORMATS.basketball;
+    const canvas = document.getElementById(cfg.canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { width: courtWidth, length: courtLength } = cfg.dimensions;
+    const scaleX = canvas.width / courtWidth;
+    const scaleY = canvas.height / courtLength;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Reused volleyball hardwood floor colors (5 zones are tracked logically without rendering zone boundaries)
+    drawHardwoodFloor(ctx, canvas.width, canvas.height);
+
+    ctx.strokeStyle = 'white';
+    ctx.fillStyle = 'white';
+    ctx.lineWidth = 2;
+
+    // Full-court outer boundary (15m x 28m)
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    // Half-court line & center circle (y = 14.0m)
+    const halfYPx = canvas.height / 2;
+    const centerXPx = canvas.width / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, halfYPx);
+    ctx.lineTo(canvas.width, halfYPx);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(centerXPx, halfYPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(centerXPx, halfYPx, 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Key / Paint area, free-throw circle, 3-point arc, backboard & rim for both ends
+    const keyWidthPx = 4.9 * scaleX;
+    const keyDepthPx = 5.8 * scaleY;
+    const keyXPx = (canvas.width - keyWidthPx) / 2;
+    const arcRadiusPx = 6.75 * scaleX;
+    const backboardWidthPx = 1.8 * scaleX;
+
+    // Bottom end (baseline at y = 0 -> canvas.height)
+    const bottomKeyYPx = canvas.height - keyDepthPx;
+    ctx.strokeRect(keyXPx, bottomKeyYPx, keyWidthPx, keyDepthPx);
+    ctx.beginPath();
+    ctx.arc(centerXPx, bottomKeyYPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    const bottomHoopYPx = canvas.height - (1.575 * scaleY);
+    ctx.beginPath();
+    ctx.arc(centerXPx, bottomHoopYPx, arcRadiusPx, Math.PI + 0.36, 2 * Math.PI - 0.36);
+    ctx.stroke();
+
+    const bottomBoardYPx = canvas.height - (1.2 * scaleY);
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(centerXPx - backboardWidthPx / 2, bottomBoardYPx);
+    ctx.lineTo(centerXPx + backboardWidthPx / 2, bottomBoardYPx);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ff5722';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(centerXPx, bottomHoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Top end (baseline at y = 28 -> 0)
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(keyXPx, 0, keyWidthPx, keyDepthPx);
+    ctx.beginPath();
+    ctx.arc(centerXPx, keyDepthPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    const topHoopYPx = 1.575 * scaleY;
+    ctx.beginPath();
+    ctx.arc(centerXPx, topHoopYPx, arcRadiusPx, 0.36, Math.PI - 0.36);
+    ctx.stroke();
+
+    const topBoardYPx = 1.2 * scaleY;
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(centerXPx - backboardWidthPx / 2, topBoardYPx);
+    ctx.lineTo(centerXPx + backboardWidthPx / 2, topBoardYPx);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ff5722';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(centerXPx, topHoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    drawPlayerBadges(ctx, canvas, scaleX, scaleY);
+}
+
+function drawPlayerBadges(ctx, canvas, scaleX, scaleY) {
     currentPlayers.forEach(p => {
-        let px = p.x * scaleX;
-        let py = canvas.height - (p.y * scaleY);
+        const px = p.x * scaleX;
+        const py = canvas.height - (p.y * scaleY);
+
         ctx.beginPath();
         ctx.arc(px, py, 16, 0, 2 * Math.PI);
-        ctx.fillStyle = 'white';
+        ctx.fillStyle = p.pos === 'L' ? '#fff3cd' : 'white';
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = 'black';
@@ -1842,54 +2388,99 @@ function drawSoccerPitch() {
     });
 }
 
-function renderSoccerPitch(formatNum) {
-    const wrapper = document.getElementById('soccer-pitch-wrapper');
-    const label = document.getElementById('active-format-label');
-    if (!wrapper) return;
+function renderBoard(sportType, formatValue) {
+    hideAllBoards();
+    activeBoardSport = null;
+    activeBoardFormat = null;
 
-    if ([7, 9, 11].includes(formatNum)) {
+    if (sportType === 'soccer') {
+        const cfg = SPORT_FORMATS.soccer;
+        const match = String(formatValue).match(/7|9|11/);
+        const formatNum = match ? parseInt(match[0], 10) : 7;
+        const wrapper = document.getElementById(cfg.wrapperId);
+        const label = document.getElementById(cfg.labelId);
+        if (!wrapper) return;
+
         wrapper.style.display = 'block';
         if (label) label.textContent = `${formatNum}v${formatNum}`;
-        currentPlayers = JSON.parse(JSON.stringify(baseFormations[formatNum] || baseFormations[7]));
+        currentPlayers = JSON.parse(JSON.stringify(cfg.formations[formatNum] || cfg.formations[7]));
+        activeBoardSport = 'soccer';
+        activeBoardFormat = String(formatNum);
         setTimeout(drawSoccerPitch, 30);
-    } else {
-        wrapper.style.display = 'none';
+        return;
+    }
+
+    if (sportType === 'volleyball') {
+        const cfg = SPORT_FORMATS.volleyball;
+        const normalizedFormat = cfg.options.includes(formatValue) ? formatValue : cfg.defaultFormat;
+        const wrapper = document.getElementById(cfg.wrapperId);
+        const label = document.getElementById(cfg.labelId);
+        if (!wrapper) return;
+
+        wrapper.style.display = 'block';
+        if (label) label.textContent = normalizedFormat;
+        currentPlayers = JSON.parse(JSON.stringify(cfg.formations[normalizedFormat] || cfg.formations[cfg.defaultFormat]));
+        currentPlayers.forEach(p => {
+            p.zone = computeVolleyballZone(p.x, p.y);
+        });
+        activeBoardSport = 'volleyball';
+        activeBoardFormat = normalizedFormat;
+        setTimeout(drawVolleyballCourt, 30);
+        return;
+    }
+
+    if (sportType === 'basketball') {
+        const cfg = SPORT_FORMATS.basketball;
+        const normalizedFormat = cfg.options.includes(formatValue) ? formatValue : cfg.defaultFormat;
+        const wrapper = document.getElementById(cfg.wrapperId);
+        const label = document.getElementById(cfg.labelId);
+        if (!wrapper) return;
+
+        wrapper.style.display = 'block';
+        if (label) label.textContent = normalizedFormat;
+        currentPlayers = JSON.parse(JSON.stringify(cfg.formations[normalizedFormat] || cfg.formations[cfg.defaultFormat]));
+        currentPlayers.forEach(p => {
+            p.zone = computeBasketballZone(p.x, p.y);
+        });
+        activeBoardSport = 'basketball';
+        activeBoardFormat = normalizedFormat;
+        setTimeout(drawBasketballCourt, 30);
     }
 }
 
-function autoSyncPitch() {
-    const activeSport = document.querySelector('.sport-selector .btn-format.active');
-    const sportName = activeSport ? activeSport.textContent.trim().toLowerCase() : 'soccer';
-    
-    if (sportName === 'soccer') {
-        const activeFormat = document.querySelector('#matrix-format-container .btn-format.active');
-        const formatText = activeFormat ? activeFormat.textContent.trim() : (selectedFormatName || '7v7');
-        const match = formatText.match(/7|9|11/);
-        const formatNum = match ? parseInt(match[0], 10) : 7;
-        renderSoccerPitch(formatNum);
-    } else {
-        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
+function redrawActiveBoard() {
+    if (activeBoardSport === 'soccer') {
+        drawSoccerPitch();
+    } else if (activeBoardSport === 'volleyball') {
+        drawVolleyballCourt();
+    } else if (activeBoardSport === 'basketball') {
+        drawBasketballCourt();
     }
 }
 
-// Drag & Drop handlers
-document.addEventListener('DOMContentLoaded', () => {
-    const canvas = document.getElementById('soccerPitchCanvas');
-    if (!canvas) return;
+function bindCanvasDrag(canvasId, sportType) {
+    const canvas = document.getElementById(canvasId);
+    const cfg = SPORT_FORMATS[sportType];
+    if (!canvas || !cfg) return;
 
-    const pitchWidth = 68;
-    const pitchLength = 105;
+    const { width: worldWidth, length: worldLength } = cfg.dimensions;
 
-    function startDrag(clientX, clientY) {
+    function getWorldCoords(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / pitchWidth;
-        const scaleY = canvas.height / pitchLength;
+        const scaleX = canvas.width / worldWidth;
+        const scaleY = canvas.height / worldLength;
         const x = (clientX - rect.left) * (canvas.width / rect.width);
         const y = (clientY - rect.top) * (canvas.height / rect.height);
+        return { x, y, scaleX, scaleY };
+    }
+
+    function startDrag(clientX, clientY) {
+        if (activeBoardSport !== sportType) return;
+        const { x, y, scaleX, scaleY } = getWorldCoords(clientX, clientY);
 
         currentPlayers.forEach(p => {
-            let px = p.x * scaleX;
-            let py = canvas.height - (p.y * scaleY);
+            const px = p.x * scaleX;
+            const py = canvas.height - (p.y * scaleY);
             if (Math.hypot(x - px, y - py) < 22) {
                 selectedPlayer = p;
             }
@@ -1897,18 +2488,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function moveDrag(clientX, clientY) {
-        if (!selectedPlayer) return;
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / pitchWidth;
-        const scaleY = canvas.height / pitchLength;
-        const x = (clientX - rect.left) * (canvas.width / rect.width);
-        const y = (clientY - rect.top) * (canvas.height / rect.height);
+        if (!selectedPlayer || activeBoardSport !== sportType) return;
+        const { x, y, scaleX, scaleY } = getWorldCoords(clientX, clientY);
 
-        selectedPlayer.x = Math.max(3, Math.min(pitchWidth - 3, x / scaleX));
-        selectedPlayer.y = Math.max(3, Math.min(pitchLength - 3, (canvas.height - y) / scaleY));
+        const minY = sportType === 'basketball' ? 0.5 : 0.4;
+        const maxY = sportType === 'volleyball'
+            ? 8.6
+            : (sportType === 'basketball' ? (worldLength - 0.5) : (worldLength - 3));
+        const padX = sportType === 'basketball' ? 0.5 : 0.4;
 
-        updatePlayerPositionLabel(selectedPlayer);
-        drawSoccerPitch();
+        selectedPlayer.x = Math.max(padX, Math.min(worldWidth - padX, x / scaleX));
+        selectedPlayer.y = Math.max(minY, Math.min(maxY, (canvas.height - y) / scaleY));
+
+        updatePlayerPositionLabel(selectedPlayer, sportType, activeBoardFormat);
+        redrawActiveBoard();
     }
 
     canvas.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
@@ -1930,57 +2523,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: false });
 
     window.addEventListener('touchend', () => { selectedPlayer = null; });
-});
+}
 
-let selectedSportName = "{{ selected_sport|safe }}" || "soccer";
-let selectedFormatName = "{{ selected_format|safe }}" || "7v7"; 
+function autoSyncBoards() {
+    const activeSport = document.querySelector('.sport-selector .btn-format.active');
+    const sportName = activeSport ? activeSport.textContent.trim().toLowerCase() : (selectedSportName || 'soccer');
+    selectedSportName = sportName;
+
+    const activeFormatBtn = document.querySelector('#matrix-format-container .btn-format.active');
+    const formatText = activeFormatBtn ? activeFormatBtn.textContent.trim() : selectedFormatName;
+
+    renderFormatButtons(sportName, formatText);
+    renderBoard(sportName, selectedFormatName);
+}
 
 function selectSport(button, sportType) {
     document.querySelectorAll('.sport-selector .btn-format').forEach(btn => btn.classList.remove('active'));
     button.classList.add('active');
     selectedSportName = sportType;
 
-    const container = document.getElementById('matrix-format-container');
-    container.innerHTML = '';
-
-    if (sportType === 'soccer') {
-        if (!['7v7', '9v9', '11v11'].includes(selectedFormatName)) {
-            selectedFormatName = '7v7';
-        }
-        
-        container.innerHTML = `
-            <h3>1. Select Roster Matrix Format</h3>
-            <div class="format-selector">
-                <button type="button" id="btn-7v7" class="btn-format ${selectedFormatName === '7v7' ? 'active' : ''}" onclick="selectFormat(this, '7v7')">7v7</button>
-                <button type="button" id="btn-9v9" class="btn-format ${selectedFormatName === '9v9' ? 'active' : ''}" onclick="selectFormat(this, '9v9')">9v9</button>
-                <button type="button" id="btn-11v11" class="btn-format ${selectedFormatName === '11v11' ? 'active' : ''}" onclick="selectFormat(this, '11v11')">11v11</button>
-            </div>
-        `;
-        const match = selectedFormatName.match(/7|9|11/);
-        renderSoccerPitch(match ? parseInt(match[0], 10) : 7);
-    } else {
-        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
-        
-        if (sportType === 'basketball') {
-            selectedFormatName = '5v5';
-            container.innerHTML = `
-                <h3>1. Select Roster Matrix Format</h3>
-                <div class="format-selector">
-                    <button type="button" id="btn-5v5" class="btn-format active" onclick="selectFormat(this, '5v5')">5v5</button>
-                    <button type="button" id="btn-3v3" class="btn-format" onclick="selectFormat(this, '3v3')">3v3</button>
-                </div>
-            `;
-        } else if (sportType === 'volleyball') {
-            selectedFormatName = '6x6';
-            container.innerHTML = `
-                <h3>1. Select Roster Matrix Format</h3>
-                <div class="format-selector">
-                    <button type="button" id="btn-6x6" class="btn-format active" onclick="selectFormat(this, '6x6')">6x6</button>
-                    <button type="button" id="btn-2v2" class="btn-format" onclick="selectFormat(this, '2v2')">2v2</button>
-                </div>
-            `;
-        }
+    const sportCfg = SPORT_FORMATS[sportType];
+    if (sportCfg && !sportCfg.options.includes(selectedFormatName)) {
+        selectedFormatName = sportCfg.defaultFormat;
     }
+
+    renderFormatButtons(sportType, selectedFormatName);
+    renderBoard(sportType, selectedFormatName);
 
     fetch('/create-lineup/select-sport', {
         method: 'POST',
@@ -1994,88 +2562,93 @@ function selectFormat(clickedButton, formatValue) {
     if (parentSelector) {
         parentSelector.querySelectorAll('.btn-format').forEach(btn => btn.classList.remove('active'));
     }
-    clickedButton.classList.add('active'); 
-    selectedFormatName = formatValue; 
+    clickedButton.classList.add('active');
+    selectedFormatName = formatValue;
 
-    const match = String(formatValue).match(/7|9|11/);
-    if (selectedSportName === 'soccer' && match) {
-        renderSoccerPitch(parseInt(match[0], 10));
-    } else {
-        document.getElementById('soccer-pitch-wrapper').style.display = 'none';
-    }
+    renderBoard(selectedSportName, formatValue);
 
     fetch('/create-lineup/select-format', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ format_type: formatValue }) 
-    }); 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format_type: formatValue })
+    });
+}
+
+function getActiveBoardPlayers() {
+    const cfg = SPORT_FORMATS[selectedSportName];
+    if (!cfg || !cfg.wrapperId) return [];
+    const wrapper = document.getElementById(cfg.wrapperId);
+    if (wrapper && wrapper.style.display !== 'none' && Array.isArray(currentPlayers)) {
+        return currentPlayers;
+    }
+    return [];
 }
 
 async function runTacticalPrompt() {
-    if (!selectedFormatName) return alert("Please choose a lineup layout format."); 
-    const runButton = document.getElementById('execute-btn'); 
-    const spinner = document.getElementById('loading-spinner'); 
-    const responseAnchor = document.getElementById('response-anchor'); 
+    if (!selectedFormatName) return alert("Please choose a lineup layout format.");
+    const runButton = document.getElementById('execute-btn');
+    const spinner = document.getElementById('loading-spinner');
+    const responseAnchor = document.getElementById('response-anchor');
     const boardPositionsCell = document.getElementById('board-positions-cell');
-    
-    runButton.disabled = true; 
-    spinner.style.display = "block"; 
-    
-    // Extract current board player position codes if soccer board is active
-    let boardPlayersPayload = [];
-    const wrapper = document.getElementById('soccer-pitch-wrapper');
-    if (wrapper && wrapper.style.display !== 'none' && typeof currentPlayers !== 'undefined') {
-        boardPlayersPayload = currentPlayers;
-    }
+
+    runButton.disabled = true;
+    spinner.style.display = "block";
+
+    const boardPlayersPayload = getActiveBoardPlayers();
 
     try {
         const response = await fetch('/create-lineup/generate-tactics', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ 
-                sport: selectedSportName, 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sport: selectedSportName,
                 format_type: selectedFormatName,
-                board_players: boardPlayersPayload 
-            }) 
-        }); 
-        const data = await response.json(); 
-        spinner.style.display = "none"; 
-        runButton.disabled = false; 
-        
+                board_players: boardPlayersPayload
+            })
+        });
+        const data = await response.json();
+        spinner.style.display = "none";
+        runButton.disabled = false;
+
         if (data.status === 'success') {
-            responseAnchor.innerHTML = data.html_payload; 
+            responseAnchor.innerHTML = data.html_payload;
             if (boardPositionsCell) {
                 boardPositionsCell.innerHTML = data.board_payload || '<span style="color: #999; font-style: italic; font-weight: normal;">No active board positions found.</span>';
             }
         } else {
-            responseAnchor.innerHTML = `<span style="color:var(--danger-color); font-weight:bold;">Error: ${data.message}</span>`; 
-        } 
+            responseAnchor.innerHTML = `<span style="color:var(--danger-color); font-weight:bold;">Error: ${data.message}</span>`;
+        }
     } catch (err) {
-        spinner.style.display = "none"; 
-        runButton.disabled = false; 
-        responseAnchor.innerHTML = '<span style="color:var(--danger-color); font-weight:bold;">Network pipeline failure.</span>'; 
-    } 
+        spinner.style.display = "none";
+        runButton.disabled = false;
+        responseAnchor.innerHTML = '<span style="color:var(--danger-color); font-weight:bold;">Network pipeline failure.</span>';
+    }
 }
 
 function clearBlueprintFrame() {
-    fetch('/create-lineup/clear-blueprint', { method: 'POST' }) 
-    .then(res => res.json()) 
+    fetch('/create-lineup/clear-blueprint', { method: 'POST' })
+    .then(res => res.json())
     .then(data => {
-        if(data.status === 'success') {
-            document.getElementById('response-anchor').innerHTML = '<span style="color:#999; font-style: italic;">No configuration structure generated yet.</span>'; 
+        if (data.status === 'success') {
+            document.getElementById('response-anchor').innerHTML = '<span style="color:#999; font-style: italic;">No configuration structure generated yet.</span>';
             const cell = document.getElementById('board-positions-cell');
             if (cell) cell.innerHTML = '<span style="color: #999; font-style: italic; font-weight: normal;">No board positions extracted yet.</span>';
-        } 
-    }); 
-} 
+        }
+    });
+}
 
-window.addEventListener('DOMContentLoaded', autoSyncPitch);
-window.addEventListener('load', autoSyncPitch);
-setTimeout(autoSyncPitch, 50);
+document.addEventListener('DOMContentLoaded', () => {
+    bindCanvasDrag('soccerPitchCanvas', 'soccer');
+    bindCanvasDrag('volleyballCourtCanvas', 'volleyball');
+    bindCanvasDrag('basketballCourtCanvas', 'basketball');
+    autoSyncBoards();
+});
+
+window.addEventListener('load', autoSyncBoards);
+setTimeout(autoSyncBoards, 50);
 </script>
 </body> 
 </html>"""
-
 ANALYTICS_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
