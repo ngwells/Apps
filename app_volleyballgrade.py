@@ -1768,7 +1768,7 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             <div class="tactical-container">
                 <h3 style="margin-top: 0;">Interactive Volleyball Court Board (<span id="active-volleyball-format-label">6x6</span>)</h3>
                 <p class="tactical-hint">Click and drag any player across the 6 bottom-half court zones. Labels update dynamically by zone/side!</p>
-                <canvas id="volleyballCourtCanvas" width="400" height="667" style="background-color: #d4a373; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+                <canvas id="volleyballCourtCanvas" width="400" height="667" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
             </div>
         </div>
     </div>
@@ -2031,6 +2031,40 @@ function drawSoccerPitch() {
     drawPlayerBadges(ctx, canvas, scaleX, scaleY);
 }
 
+function drawVolleyballWoodFloor(ctx, width, height) {
+    // Base warm maple/oak hardwood gradient
+    const baseGrad = ctx.createLinearGradient(0, 0, width, height);
+    baseGrad.addColorStop(0, '#d89b5c');
+    baseGrad.addColorStop(0.5, '#c88a4b');
+    baseGrad.addColorStop(1, '#b8783b');
+    ctx.fillStyle = baseGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Subtle hardwood plank lines, alternating shading & staggered joints
+    const plankCount = 18;
+    const plankWidth = width / plankCount;
+    for (let i = 0; i < plankCount; i++) {
+        const px = i * plankWidth;
+        ctx.fillStyle = i % 2 === 0
+            ? 'rgba(255, 232, 196, 0.07)'
+            : 'rgba(92, 50, 16, 0.06)';
+        ctx.fillRect(px, 0, plankWidth, height);
+
+        ctx.strokeStyle = 'rgba(110, 62, 22, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, height);
+        ctx.stroke();
+
+        const jointY = ((i * 73) % Math.max(120, height - 60)) + 30;
+        ctx.beginPath();
+        ctx.moveTo(px, jointY);
+        ctx.lineTo(px + plankWidth, jointY);
+        ctx.stroke();
+    }
+}
+
 function drawVolleyballCourt() {
     const cfg = SPORT_FORMATS.volleyball;
     const canvas = document.getElementById(cfg.canvasId);
@@ -2042,9 +2076,8 @@ function drawVolleyballCourt() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Wood court base
-    ctx.fillStyle = '#d4a373';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Hardwood court floor
+    drawVolleyballWoodFloor(ctx, canvas.width, canvas.height);
 
     // Highlight active bottom half (0..9m) and 6 zones
     const halfHeightPx = 9.0 * scaleY;
@@ -2101,8 +2134,9 @@ function drawVolleyballCourt() {
     });
     ctx.restore();
 
-    // Center line & Net at y = 9.0
+    // Center line at y = 9.0
     const centerYPx = canvas.height - (9.0 * scaleY);
+    ctx.save();
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -2110,16 +2144,47 @@ function drawVolleyballCourt() {
     ctx.lineTo(canvas.width, centerYPx);
     ctx.stroke();
 
-    ctx.strokeStyle = 'black';
-    ctx.lineWidth = 3.5;
+    // Volleyball net across the middle (y = 9.0)
+    const netHeightPx = 10;
+    const netTopPx = centerYPx - (netHeightPx / 2);
+
+    // Translucent net mesh band
+    ctx.fillStyle = 'rgba(25, 25, 25, 0.45)';
+    ctx.fillRect(0, netTopPx, canvas.width, netHeightPx);
+
+    // Vertical mesh cross-lines inside net band
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 1;
+    for (let x = 8; x < canvas.width; x += 8) {
+        ctx.beginPath();
+        ctx.moveTo(x, netTopPx);
+        ctx.lineTo(x, netTopPx + netHeightPx);
+        ctx.stroke();
+    }
+
+    // Top white net tape & bottom cable edge
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.moveTo(0, centerYPx);
-    ctx.lineTo(canvas.width, centerYPx);
+    ctx.moveTo(0, netTopPx);
+    ctx.lineTo(canvas.width, netTopPx);
     ctx.stroke();
+
+    ctx.strokeStyle = '#111111';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, netTopPx + netHeightPx);
+    ctx.lineTo(canvas.width, netTopPx + netHeightPx);
+    ctx.stroke();
+
+    // Left & right net posts / antennae markers
+    ctx.fillStyle = '#222222';
+    ctx.fillRect(0, centerYPx - 9, 6, 18);
+    ctx.fillRect(canvas.width - 6, centerYPx - 9, 6, 18);
+    ctx.restore();
 
     drawPlayerBadges(ctx, canvas, scaleX, scaleY);
 }
-
 function drawPlayerBadges(ctx, canvas, scaleX, scaleY) {
     currentPlayers.forEach(p => {
         const px = p.x * scaleX;
