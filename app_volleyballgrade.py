@@ -1795,12 +1795,12 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Interactive Basketball Court Board -->
+        <!-- Interactive Full-Court Basketball Board -->
         <div id="basketball-court-wrapper" class="board-wrapper">
             <div class="tactical-container">
-                <h3 style="margin-top: 0;">Interactive Basketball Court Board (<span id="active-basketball-format-label">5v5</span>)</h3>
-                <p class="tactical-hint">Click and drag any player across the 6 court zones. Labels update dynamically by spacing & zone!</p>
-                <canvas id="basketballCourtCanvas" width="400" height="373" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+                <h3 style="margin-top: 0;">Interactive Basketball Full Court Board (<span id="active-basketball-format-label">5v5</span>)</h3>
+                <p class="tactical-hint">Click and drag any player anywhere across the full court. Labels update dynamically by court zone & spacing!</p>
+                <canvas id="basketballCourtCanvas" width="400" height="747" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
             </div>
         </div>
     </div>
@@ -1924,20 +1924,20 @@ const SPORT_FORMATS = {
         wrapperId: 'basketball-court-wrapper',
         labelId: 'active-basketball-format-label',
         canvasId: 'basketballCourtCanvas',
-        // Half-court coordinate system: width 15.0m (x: 0..15), depth 14.0m (y: 0 = baseline/hoop, y: 14 = half-court line)
-        dimensions: { width: 15.0, length: 14.0 },
+        // Full court coordinate system: width 15.0m (x: 0..15), length 28.0m (y: 0 = bottom baseline, y: 28 = top baseline)
+        dimensions: { width: 15.0, length: 28.0 },
         formations: {
             '5v5': [
-                {pos: 'PG', x: 7.5,  y: 11.2, zone: 5},
-                {pos: 'SG', x: 13.0, y: 8.5,  zone: 6},
-                {pos: 'SF', x: 2.0,  y: 8.2,  zone: 4},
-                {pos: 'PF', x: 10.2, y: 3.5,  zone: 3},
-                {pos: 'C',  x: 6.2,  y: 2.6,  zone: 2}
+                {pos: 'PG', x: 7.5,  y: 12.2, zone: 3},
+                {pos: 'SG', x: 12.6, y: 9.0,  zone: 5},
+                {pos: 'SF', x: 2.4,  y: 8.8,  zone: 4},
+                {pos: 'PF', x: 10.2, y: 4.2,  zone: 2},
+                {pos: 'C',  x: 6.2,  y: 2.8,  zone: 1}
             ],
             '3v3': [
-                {pos: 'G', x: 7.5,  y: 10.5, zone: 5},
-                {pos: 'W', x: 12.6, y: 5.2,  zone: 3},
-                {pos: 'B', x: 5.8,  y: 2.8,  zone: 2}
+                {pos: 'G', x: 7.5,  y: 11.5, zone: 3},
+                {pos: 'W', x: 12.5, y: 6.5,  zone: 5},
+                {pos: 'B', x: 6.0,  y: 3.0,  zone: 1}
             ]
         }
     }
@@ -1987,11 +1987,17 @@ function computeVolleyballZone(x, y) {
 }
 
 function computeBasketballZone(x, y) {
-    // 6 zones on half-court (width 15m: x < 5 left, 5..10 center, >= 10 right; depth 14m: y <= 7 paint/low, y > 7 perimeter/high)
-    const isUpper = y > 7.0;
-    if (x < 5.0) return isUpper ? 4 : 1;
-    if (x < 10.0) return isUpper ? 5 : 2;
-    return isUpper ? 6 : 3;
+    // 5 unrendered tactical zones across full court (width 15m, length 28m):
+    // Z1: Lower Paint / Rim Zone (y <= 6.5, 5.0 <= x <= 10.0)
+    // Z2: Upper Paint / Rim Zone (y >= 21.5, 5.0 <= x <= 10.0)
+    // Z3: Midcourt / Transition Hub (10.0 < y < 18.0, 4.5 <= x <= 10.5)
+    // Z4: Left Wing / Perimeter Flank (x < 5.0)
+    // Z5: Right Wing / Perimeter Flank (x >= 10.0)
+    if (y <= 6.5 && x >= 5.0 && x <= 10.0) return 1;
+    if (y >= 21.5 && x >= 5.0 && x <= 10.0) return 2;
+    if (x < 5.0) return 4;
+    if (x >= 10.0) return 5;
+    return 3;
 }
 
 function updatePlayerPositionLabel(p, sportType, formatType) {
@@ -2041,20 +2047,23 @@ function updatePlayerPositionLabel(p, sportType, formatType) {
         const zone = computeBasketballZone(p.x, p.y);
         p.zone = zone;
 
+        // Distance from nearest baseline (0m or 28m) so both halves map symmetrically
+        const distToBaseline = Math.min(p.y, 28.0 - p.y);
+
         if (formatType === '3v3') {
-            if (y <= 5.2) p.pos = 'B';
-            else if (x < 5.0 || x > 10.0) p.pos = 'W';
+            if (distToBaseline <= 5.2 && p.x >= 4.8 && p.x <= 10.2) p.pos = 'B';
+            else if (p.x < 4.8 || p.x > 10.2) p.pos = 'W';
             else p.pos = 'G';
             return;
         }
 
-        // 5v5 dynamic role assignment by depth (y) and lane (x)
-        if (y <= 4.8) {
-            p.pos = (x >= 5.2 && x <= 9.8) ? 'C' : 'PF';
-        } else if (y <= 9.2) {
-            p.pos = (x < 5.5) ? 'SF' : (x > 9.5 ? 'SG' : 'PF');
+        // 5v5 dynamic role assignment across full court
+        if (distToBaseline <= 4.6) {
+            p.pos = (p.x >= 5.2 && p.x <= 9.8) ? 'C' : 'PF';
+        } else if (distToBaseline <= 9.5) {
+            p.pos = (p.x < 5.2) ? 'SF' : (p.x > 9.8 ? 'SG' : 'PF');
         } else {
-            p.pos = (x >= 4.5 && x <= 10.5) ? 'PG' : (x < 4.5 ? 'SF' : 'SG');
+            p.pos = (p.x >= 4.5 && p.x <= 10.5) ? 'PG' : (p.x < 4.5 ? 'SF' : 'SG');
         }
     }
 }
@@ -2270,86 +2279,89 @@ function drawBasketballCourt() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Reused volleyball hardwood floor colors
+    // Reused volleyball hardwood floor colors (5 zones are tracked logically without rendering zone boundaries)
     drawHardwoodFloor(ctx, canvas.width, canvas.height);
 
-    // 6 zones on half-court (3 lanes x 2 depth bands: y=0..7 => Z1,Z2,Z3; y=7..14 => Z4,Z5,Z6)
-    const colWidthPx = 5.0 * scaleX;
-    const rowHeightPx = 7.0 * scaleY;
-    const zonesGrid = [
-        [
-            { z: 4, x0: 0, yTop: 0, w: colWidthPx, h: rowHeightPx },
-            { z: 5, x0: colWidthPx, yTop: 0, w: colWidthPx, h: rowHeightPx },
-            { z: 6, x0: colWidthPx * 2, yTop: 0, w: colWidthPx, h: rowHeightPx }
-        ],
-        [
-            { z: 1, x0: 0, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx },
-            { z: 2, x0: colWidthPx, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx },
-            { z: 3, x0: colWidthPx * 2, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx }
-        ]
-    ];
-
-    zonesGrid.flat().forEach((zoneBox, idx) => {
-        ctx.save();
-        ctx.fillStyle = idx % 2 === 0 ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
-        ctx.fillRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
-
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-        ctx.setLineDash([4, 4]);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
-
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-        ctx.font = 'bold 11px Arial';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText(`Z${zoneBox.z}`, zoneBox.x0 + 6, zoneBox.yTop + 5);
-        ctx.restore();
-    });
-
-    // Outer boundary & top half-court line
     ctx.strokeStyle = 'white';
+    ctx.fillStyle = 'white';
     ctx.lineWidth = 2;
+
+    // Full-court outer boundary (15m x 28m)
     ctx.strokeRect(0, 0, canvas.width, canvas.height);
 
-    // Key / Paint area (width 4.9m centered at x=7.5m, depth 5.8m from bottom baseline)
+    // Half-court line & center circle (y = 14.0m)
+    const halfYPx = canvas.height / 2;
+    const centerXPx = canvas.width / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, halfYPx);
+    ctx.lineTo(canvas.width, halfYPx);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(centerXPx, halfYPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(centerXPx, halfYPx, 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Key / Paint area, free-throw circle, 3-point arc, backboard & rim for both ends
     const keyWidthPx = 4.9 * scaleX;
     const keyDepthPx = 5.8 * scaleY;
     const keyXPx = (canvas.width - keyWidthPx) / 2;
-    const keyYPx = canvas.height - keyDepthPx;
-    ctx.strokeRect(keyXPx, keyYPx, keyWidthPx, keyDepthPx);
-
-    // Free-throw circle (radius 1.8m)
-    const ftCenterXPx = canvas.width / 2;
-    const ftCenterYPx = canvas.height - keyDepthPx;
-    ctx.beginPath();
-    ctx.arc(ftCenterXPx, ftCenterYPx, 1.8 * scaleX, 0, 2 * Math.PI);
-    ctx.stroke();
-
-    // Three-point arc (6.75m radius from basket at y = 1.575m above baseline)
-    const hoopXPx = canvas.width / 2;
-    const hoopYPx = canvas.height - (1.575 * scaleY);
     const arcRadiusPx = 6.75 * scaleX;
-    const startAngle = Math.PI + 0.36;
-    const endAngle = 2 * Math.PI - 0.36;
+    const backboardWidthPx = 1.8 * scaleX;
+
+    // Bottom end (baseline at y = 0 -> canvas.height)
+    const bottomKeyYPx = canvas.height - keyDepthPx;
+    ctx.strokeRect(keyXPx, bottomKeyYPx, keyWidthPx, keyDepthPx);
     ctx.beginPath();
-    ctx.arc(hoopXPx, hoopYPx, arcRadiusPx, startAngle, endAngle);
+    ctx.arc(centerXPx, bottomKeyYPx, 1.8 * scaleX, 0, 2 * Math.PI);
     ctx.stroke();
 
-    // Backboard & Rim
-    const backboardWidthPx = 1.8 * scaleX;
-    const backboardYPx = canvas.height - (1.2 * scaleY);
+    const bottomHoopYPx = canvas.height - (1.575 * scaleY);
+    ctx.beginPath();
+    ctx.arc(centerXPx, bottomHoopYPx, arcRadiusPx, Math.PI + 0.36, 2 * Math.PI - 0.36);
+    ctx.stroke();
+
+    const bottomBoardYPx = canvas.height - (1.2 * scaleY);
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(hoopXPx - backboardWidthPx / 2, backboardYPx);
-    ctx.lineTo(hoopXPx + backboardWidthPx / 2, backboardYPx);
+    ctx.moveTo(centerXPx - backboardWidthPx / 2, bottomBoardYPx);
+    ctx.lineTo(centerXPx + backboardWidthPx / 2, bottomBoardYPx);
     ctx.stroke();
 
     ctx.strokeStyle = '#ff5722';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(hoopXPx, hoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
+    ctx.arc(centerXPx, bottomHoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Top end (baseline at y = 28 -> 0)
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(keyXPx, 0, keyWidthPx, keyDepthPx);
+    ctx.beginPath();
+    ctx.arc(centerXPx, keyDepthPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    const topHoopYPx = 1.575 * scaleY;
+    ctx.beginPath();
+    ctx.arc(centerXPx, topHoopYPx, arcRadiusPx, 0.36, Math.PI - 0.36);
+    ctx.stroke();
+
+    const topBoardYPx = 1.2 * scaleY;
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(centerXPx - backboardWidthPx / 2, topBoardYPx);
+    ctx.lineTo(centerXPx + backboardWidthPx / 2, topBoardYPx);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ff5722';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(centerXPx, topHoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
     ctx.stroke();
 
     drawPlayerBadges(ctx, canvas, scaleX, scaleY);
@@ -2637,7 +2649,6 @@ setTimeout(autoSyncBoards, 50);
 </script>
 </body> 
 </html>"""
-
 ANALYTICS_PAGE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
 <head> 
