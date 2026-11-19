@@ -710,6 +710,8 @@ def clear_blueprint():
 
 
 
+import time
+
 SOCCER_POSITION_NAMES = {
     'GK': 'Goalkeeper',
     'LDB': 'Left Defender Back',
@@ -739,9 +741,23 @@ VOLLEYBALL_POSITION_NAMES = {
     'LS': 'Left Side (Serve-Receive / Attacking / Setting)'
 }
 
+BASKETBALL_POSITION_NAMES = {
+    # 5v5 standard roles
+    'PG': 'Point Guard (Primary Ball Handler / Playmaker / Perimeter)',
+    'SG': 'Shooting Guard (Perimeter Scorer / Spacer / Secondary Handler)',
+    'SF': 'Small Forward (Two-Way Wing / Slasher / Multi-Position Defender)',
+    'PF': 'Power Forward (Stretch Forward / Weak-Side Rebounder / Forward-Center)',
+    'C': 'Center (Rim Protector / Paint Anchor / Pick-and-Roll Finisher)',
+    # 3v3 half-court roles
+    'G': 'Guard (Perimeter Initiator / Spacer / Drive-and-Kick)',
+    'W': 'Wing (Cut / Corner Shooter / Switch Defender)',
+    'B': 'Big (Screen Setter / Paint Finisher / Rebounder)'
+}
+
 SPORT_POSITION_NAMES = {
     'soccer': SOCCER_POSITION_NAMES,
-    'volleyball': VOLLEYBALL_POSITION_NAMES
+    'volleyball': VOLLEYBALL_POSITION_NAMES,
+    'basketball': BASKETBALL_POSITION_NAMES
 }
 
 
@@ -785,7 +801,7 @@ def _build_board_position_context(sport_key: str, active_board_players: list) ->
             labeled_name = base_name
 
         processed_full_names.append(labeled_name)
-        if sport_key == 'volleyball' and zone is not None:
+        if sport_key in ('volleyball', 'basketball') and zone is not None:
             summary_items.append(f"{labeled_name} [Z{zone}]")
         else:
             summary_items.append(labeled_name)
@@ -804,6 +820,14 @@ def _build_board_position_context(sport_key: str, active_board_players: list) ->
             f"multi-zone/side designations, detail their shared core traits as well as their "
             f"distinct rotational, front-row vs. back-row, attacking/blocking, serve-receive, "
             f"and defensive responsibilities."
+        )
+    elif sport_key == 'basketball':
+        context_str = (
+            f" Specifically, base the positions on this exact basketball court layout: "
+            f"{', '.join(summary_items)}. For duplicate position roles (like _1 and _2) or "
+            f"zone/spacing roles, detail their shared core traits as well as their distinct "
+            f"perimeter vs. paint spacing, pick-and-roll/off-ball action, rebounding, transition, "
+            f"and on/off-ball defensive responsibilities."
         )
     else:
         context_str = f" Specifically, base the positions on this layout: {', '.join(processed_full_names)}."
@@ -852,7 +876,6 @@ Output ONLY a valid JSON array. Do not use crazy and weird punctuation like @ an
         "temperature": 0.2
     }
     
-    import time
     api_response = None
     for attempt in range(3):
         try:
@@ -1771,6 +1794,15 @@ LINEUP_PAGE_HTML = """<!DOCTYPE html>
                 <canvas id="volleyballCourtCanvas" width="400" height="667" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
             </div>
         </div>
+
+        <!-- Interactive Basketball Court Board -->
+        <div id="basketball-court-wrapper" class="board-wrapper">
+            <div class="tactical-container">
+                <h3 style="margin-top: 0;">Interactive Basketball Court Board (<span id="active-basketball-format-label">5v5</span>)</h3>
+                <p class="tactical-hint">Click and drag any player across the 6 court zones. Labels update dynamically by spacing & zone!</p>
+                <canvas id="basketballCourtCanvas" width="400" height="373" style="background-color: #c88a4b; border: 3px solid white; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); cursor: pointer; touch-action: none; max-width: 100%;"></canvas>
+            </div>
+        </div>
     </div>
     
     <div class="btn-group"> 
@@ -1862,10 +1894,6 @@ const SPORT_FORMATS = {
             ]
         }
     },
-    basketball: {
-        options: ['5v5', '3v3'],
-        defaultFormat: '5v5'
-    },
     volleyball: {
         options: ['6x6', '2v2'],
         defaultFormat: '6x6',
@@ -1887,6 +1915,29 @@ const SPORT_FORMATS = {
             '2v2': [
                 {pos: 'L', x: 2.5, y: 5.2, zone: 4},
                 {pos: 'R', x: 6.5, y: 5.2, zone: 2}
+            ]
+        }
+    },
+    basketball: {
+        options: ['5v5', '3v3'],
+        defaultFormat: '5v5',
+        wrapperId: 'basketball-court-wrapper',
+        labelId: 'active-basketball-format-label',
+        canvasId: 'basketballCourtCanvas',
+        // Half-court coordinate system: width 15.0m (x: 0..15), depth 14.0m (y: 0 = baseline/hoop, y: 14 = half-court line)
+        dimensions: { width: 15.0, length: 14.0 },
+        formations: {
+            '5v5': [
+                {pos: 'PG', x: 7.5,  y: 11.2, zone: 5},
+                {pos: 'SG', x: 13.0, y: 8.5,  zone: 6},
+                {pos: 'SF', x: 2.0,  y: 8.2,  zone: 4},
+                {pos: 'PF', x: 10.2, y: 3.5,  zone: 3},
+                {pos: 'C',  x: 6.2,  y: 2.6,  zone: 2}
+            ],
+            '3v3': [
+                {pos: 'G', x: 7.5,  y: 10.5, zone: 5},
+                {pos: 'W', x: 12.6, y: 5.2,  zone: 3},
+                {pos: 'B', x: 5.8,  y: 2.8,  zone: 2}
             ]
         }
     }
@@ -1935,6 +1986,14 @@ function computeVolleyballZone(x, y) {
     return isFront ? 2 : 1;
 }
 
+function computeBasketballZone(x, y) {
+    // 6 zones on half-court (width 15m: x < 5 left, 5..10 center, >= 10 right; depth 14m: y <= 7 paint/low, y > 7 perimeter/high)
+    const isUpper = y > 7.0;
+    if (x < 5.0) return isUpper ? 4 : 1;
+    if (x < 10.0) return isUpper ? 5 : 2;
+    return isUpper ? 6 : 3;
+}
+
 function updatePlayerPositionLabel(p, sportType, formatType) {
     if (!p || p.locked) return;
 
@@ -1974,6 +2033,28 @@ function updatePlayerPositionLabel(p, sportType, formatType) {
             if (col === 'left') p.pos = 'DS';
             else if (col === 'center') p.pos = 'L';
             else p.pos = 'OPP';
+        }
+        return;
+    }
+
+    if (sportType === 'basketball') {
+        const zone = computeBasketballZone(p.x, p.y);
+        p.zone = zone;
+
+        if (formatType === '3v3') {
+            if (y <= 5.2) p.pos = 'B';
+            else if (x < 5.0 || x > 10.0) p.pos = 'W';
+            else p.pos = 'G';
+            return;
+        }
+
+        // 5v5 dynamic role assignment by depth (y) and lane (x)
+        if (y <= 4.8) {
+            p.pos = (x >= 5.2 && x <= 9.8) ? 'C' : 'PF';
+        } else if (y <= 9.2) {
+            p.pos = (x < 5.5) ? 'SF' : (x > 9.5 ? 'SG' : 'PF');
+        } else {
+            p.pos = (x >= 4.5 && x <= 10.5) ? 'PG' : (x < 4.5 ? 'SF' : 'SG');
         }
     }
 }
@@ -2031,8 +2112,8 @@ function drawSoccerPitch() {
     drawPlayerBadges(ctx, canvas, scaleX, scaleY);
 }
 
-function drawVolleyballWoodFloor(ctx, width, height) {
-    // Base warm maple/oak hardwood gradient
+function drawHardwoodFloor(ctx, width, height) {
+    // Reused warm maple/oak hardwood gradient & plank detailing
     const baseGrad = ctx.createLinearGradient(0, 0, width, height);
     baseGrad.addColorStop(0, '#d89b5c');
     baseGrad.addColorStop(0.5, '#c88a4b');
@@ -2040,7 +2121,6 @@ function drawVolleyballWoodFloor(ctx, width, height) {
     ctx.fillStyle = baseGrad;
     ctx.fillRect(0, 0, width, height);
 
-    // Subtle hardwood plank lines, alternating shading & staggered joints
     const plankCount = 18;
     const plankWidth = width / plankCount;
     for (let i = 0; i < plankCount; i++) {
@@ -2077,14 +2157,12 @@ function drawVolleyballCourt() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Hardwood court floor
-    drawVolleyballWoodFloor(ctx, canvas.width, canvas.height);
+    drawHardwoodFloor(ctx, canvas.width, canvas.height);
 
     // Highlight active bottom half (0..9m) and 6 zones
-    const halfHeightPx = 9.0 * scaleY;
     const colWidthPx = 3.0 * scaleX;
     const rowHeightPx = 4.5 * scaleY;
 
-    // 6 zones on bottom half: top row of bottom half (y=4.5..9 -> zones 4, 3, 2) and bottom row (y=0..4.5 -> zones 5, 6, 1)
     const zonesGrid = [
         [
             { z: 4, x0: 0, yTop: canvas.height - 9.0 * scaleY, w: colWidthPx, h: rowHeightPx },
@@ -2134,7 +2212,7 @@ function drawVolleyballCourt() {
     });
     ctx.restore();
 
-    // Center line at y = 9.0
+    // Center line & Net at y = 9.0
     const centerYPx = canvas.height - (9.0 * scaleY);
     ctx.save();
     ctx.strokeStyle = 'white';
@@ -2144,15 +2222,12 @@ function drawVolleyballCourt() {
     ctx.lineTo(canvas.width, centerYPx);
     ctx.stroke();
 
-    // Volleyball net across the middle (y = 9.0)
     const netHeightPx = 10;
     const netTopPx = centerYPx - (netHeightPx / 2);
 
-    // Translucent net mesh band
     ctx.fillStyle = 'rgba(25, 25, 25, 0.45)';
     ctx.fillRect(0, netTopPx, canvas.width, netHeightPx);
 
-    // Vertical mesh cross-lines inside net band
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
     ctx.lineWidth = 1;
     for (let x = 8; x < canvas.width; x += 8) {
@@ -2162,7 +2237,6 @@ function drawVolleyballCourt() {
         ctx.stroke();
     }
 
-    // Top white net tape & bottom cable edge
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
@@ -2177,7 +2251,6 @@ function drawVolleyballCourt() {
     ctx.lineTo(canvas.width, netTopPx + netHeightPx);
     ctx.stroke();
 
-    // Left & right net posts / antennae markers
     ctx.fillStyle = '#222222';
     ctx.fillRect(0, centerYPx - 9, 6, 18);
     ctx.fillRect(canvas.width - 6, centerYPx - 9, 6, 18);
@@ -2185,6 +2258,103 @@ function drawVolleyballCourt() {
 
     drawPlayerBadges(ctx, canvas, scaleX, scaleY);
 }
+
+function drawBasketballCourt() {
+    const cfg = SPORT_FORMATS.basketball;
+    const canvas = document.getElementById(cfg.canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { width: courtWidth, length: courtLength } = cfg.dimensions;
+    const scaleX = canvas.width / courtWidth;
+    const scaleY = canvas.height / courtLength;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Reused volleyball hardwood floor colors
+    drawHardwoodFloor(ctx, canvas.width, canvas.height);
+
+    // 6 zones on half-court (3 lanes x 2 depth bands: y=0..7 => Z1,Z2,Z3; y=7..14 => Z4,Z5,Z6)
+    const colWidthPx = 5.0 * scaleX;
+    const rowHeightPx = 7.0 * scaleY;
+    const zonesGrid = [
+        [
+            { z: 4, x0: 0, yTop: 0, w: colWidthPx, h: rowHeightPx },
+            { z: 5, x0: colWidthPx, yTop: 0, w: colWidthPx, h: rowHeightPx },
+            { z: 6, x0: colWidthPx * 2, yTop: 0, w: colWidthPx, h: rowHeightPx }
+        ],
+        [
+            { z: 1, x0: 0, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx },
+            { z: 2, x0: colWidthPx, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx },
+            { z: 3, x0: colWidthPx * 2, yTop: rowHeightPx, w: colWidthPx, h: rowHeightPx }
+        ]
+    ];
+
+    zonesGrid.flat().forEach((zoneBox, idx) => {
+        ctx.save();
+        ctx.fillStyle = idx % 2 === 0 ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
+        ctx.fillRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(zoneBox.x0, zoneBox.yTop, zoneBox.w, zoneBox.h);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.font = 'bold 11px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`Z${zoneBox.z}`, zoneBox.x0 + 6, zoneBox.yTop + 5);
+        ctx.restore();
+    });
+
+    // Outer boundary & top half-court line
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    // Key / Paint area (width 4.9m centered at x=7.5m, depth 5.8m from bottom baseline)
+    const keyWidthPx = 4.9 * scaleX;
+    const keyDepthPx = 5.8 * scaleY;
+    const keyXPx = (canvas.width - keyWidthPx) / 2;
+    const keyYPx = canvas.height - keyDepthPx;
+    ctx.strokeRect(keyXPx, keyYPx, keyWidthPx, keyDepthPx);
+
+    // Free-throw circle (radius 1.8m)
+    const ftCenterXPx = canvas.width / 2;
+    const ftCenterYPx = canvas.height - keyDepthPx;
+    ctx.beginPath();
+    ctx.arc(ftCenterXPx, ftCenterYPx, 1.8 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Three-point arc (6.75m radius from basket at y = 1.575m above baseline)
+    const hoopXPx = canvas.width / 2;
+    const hoopYPx = canvas.height - (1.575 * scaleY);
+    const arcRadiusPx = 6.75 * scaleX;
+    const startAngle = Math.PI + 0.36;
+    const endAngle = 2 * Math.PI - 0.36;
+    ctx.beginPath();
+    ctx.arc(hoopXPx, hoopYPx, arcRadiusPx, startAngle, endAngle);
+    ctx.stroke();
+
+    // Backboard & Rim
+    const backboardWidthPx = 1.8 * scaleX;
+    const backboardYPx = canvas.height - (1.2 * scaleY);
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(hoopXPx - backboardWidthPx / 2, backboardYPx);
+    ctx.lineTo(hoopXPx + backboardWidthPx / 2, backboardYPx);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ff5722';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(hoopXPx, hoopYPx, 0.23 * scaleX, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    drawPlayerBadges(ctx, canvas, scaleX, scaleY);
+}
+
 function drawPlayerBadges(ctx, canvas, scaleX, scaleY) {
     currentPlayers.forEach(p => {
         const px = p.x * scaleX;
@@ -2244,6 +2414,25 @@ function renderBoard(sportType, formatValue) {
         activeBoardSport = 'volleyball';
         activeBoardFormat = normalizedFormat;
         setTimeout(drawVolleyballCourt, 30);
+        return;
+    }
+
+    if (sportType === 'basketball') {
+        const cfg = SPORT_FORMATS.basketball;
+        const normalizedFormat = cfg.options.includes(formatValue) ? formatValue : cfg.defaultFormat;
+        const wrapper = document.getElementById(cfg.wrapperId);
+        const label = document.getElementById(cfg.labelId);
+        if (!wrapper) return;
+
+        wrapper.style.display = 'block';
+        if (label) label.textContent = normalizedFormat;
+        currentPlayers = JSON.parse(JSON.stringify(cfg.formations[normalizedFormat] || cfg.formations[cfg.defaultFormat]));
+        currentPlayers.forEach(p => {
+            p.zone = computeBasketballZone(p.x, p.y);
+        });
+        activeBoardSport = 'basketball';
+        activeBoardFormat = normalizedFormat;
+        setTimeout(drawBasketballCourt, 30);
     }
 }
 
@@ -2252,6 +2441,8 @@ function redrawActiveBoard() {
         drawSoccerPitch();
     } else if (activeBoardSport === 'volleyball') {
         drawVolleyballCourt();
+    } else if (activeBoardSport === 'basketball') {
+        drawBasketballCourt();
     }
 }
 
@@ -2288,11 +2479,13 @@ function bindCanvasDrag(canvasId, sportType) {
         if (!selectedPlayer || activeBoardSport !== sportType) return;
         const { x, y, scaleX, scaleY } = getWorldCoords(clientX, clientY);
 
-        // Keep volleyball players within bottom half (0.4m to 8.6m) or soccer pitch bounds
-        const minY = 0.4;
-        const maxY = sportType === 'volleyball' ? 8.6 : (worldLength - 3);
+        const minY = sportType === 'basketball' ? 0.5 : 0.4;
+        const maxY = sportType === 'volleyball'
+            ? 8.6
+            : (sportType === 'basketball' ? (worldLength - 0.5) : (worldLength - 3));
+        const padX = sportType === 'basketball' ? 0.5 : 0.4;
 
-        selectedPlayer.x = Math.max(0.4, Math.min(worldWidth - 0.4, x / scaleX));
+        selectedPlayer.x = Math.max(padX, Math.min(worldWidth - padX, x / scaleX));
         selectedPlayer.y = Math.max(minY, Math.min(maxY, (canvas.height - y) / scaleY));
 
         updatePlayerPositionLabel(selectedPlayer, sportType, activeBoardFormat);
@@ -2435,6 +2628,7 @@ function clearBlueprintFrame() {
 document.addEventListener('DOMContentLoaded', () => {
     bindCanvasDrag('soccerPitchCanvas', 'soccer');
     bindCanvasDrag('volleyballCourtCanvas', 'volleyball');
+    bindCanvasDrag('basketballCourtCanvas', 'basketball');
     autoSyncBoards();
 });
 
