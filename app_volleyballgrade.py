@@ -2032,75 +2032,47 @@ function clearFullSession() {
 PRACTICE_MODE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EvalBricks | Practice Mode</title>
-<style>
- :root {
-   --primary-color: #007bff;
-   --success-color: #28a745;
-   --danger-color: #dc3545;
-   --info-color: #17a2b8;
-   --purple-color: #6f42c1;
-   --dark-bg: #f4f6f9;
-   --card-bg: #ffffff;
-   --text-main: #333333;
- }
- * { box-sizing: border-box; }
- body {
-   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-   margin: 0;
-   padding: 10px;
-   background: var(--dark-bg);
-   color: var(--text-main);
-   line-height: 1.5;
- }
- .container {
-   background: var(--card-bg);
-   width: 100%;
-   max-width: 1100px;
-   margin: 10px auto 40px auto;
-   padding: 20px;
-   border-radius: 12px;
-   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
- }
- @media (min-width: 768px) {
-   body { padding: 30px; }
-   .container { padding: 40px; }
- }
- .mode-subtitle {
-   color: #666;
-   font-size: 14px;
-   margin-bottom: 20px;
- }
- .practice-workspace {
-   border: 2px dashed #cbd5e1;
-   background: #f8fafc;
-   border-radius: 10px;
-   padding: 28px;
-   margin-top: 20px;
- }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvalBricks | Post Game Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #0b1120;
+            --card-bg: #111827;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary-color: #2563eb;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .placeholder-box {
+            max-width: 1100px;
+            margin: 24px auto;
+            min-height: 55vh;
+            background: var(--card-bg);
+            border: 1px dashed rgba(148, 163, 184, 0.3);
+            border-radius: 14px;
+            padding: 32px;
+        }
+    </style>
 </head>
 <body>
-""" + SHARED_NAV + """
+    {{ shared_nav | safe }}
 """ + SESSION_TOP_BAR_HTML + """
-<div class="container">
-    <h1>EvalBricks Practice Mode</h1>
-    <p class="mode-subtitle">
-        Active Mode: <strong>{{ active_mode|default("Practice Mode") }}</strong> |
-        Raw records: <strong>{{ raw_count|default(0) }}</strong> |
-        Processed records: <strong>{{ processed_count|default(0) }}</strong>
-    </p>
-    <div class="practice-workspace">
-        <h3>Practice Mode Workspace</h3>
-        <p style="color:#64748b; margin-bottom:0;">
-            Ready for a new practice session. Use the top session bar to save, load, or start a new session.
-        </p>
-    </div>
-</div>
+    <div class="placeholder-box"></div>
 </body>
 </html>"""
+
+
+
 POSTGAME_MODE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
