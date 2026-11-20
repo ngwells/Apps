@@ -1763,11 +1763,119 @@ TRYOUT_MODE_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EvalBricks | TryOut Mode</title>
-""" + SHARED_CSS + """
 <style>
- body { text-align: center; }
- .mode-subtitle { text-align: center; color: #666; margin-bottom: 24px; font-size: 14px; }
- .grid { display: grid; grid-template-columns: 1fr; gap: 20px; margin: 25px 0 30px 0; }
+ :root {
+   --primary-color: #007bff;
+   --success-color: #28a745;
+   --danger-color: #dc3545;
+   --info-color: #17a2b8;
+   --purple-color: #6f42c1;
+   --dark-bg: #f4f6f9;
+   --card-bg: #ffffff;
+   --text-main: #333333;
+ }
+ * { box-sizing: border-box; }
+ body {
+   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+   margin: 0;
+   padding: 10px;
+   background: var(--dark-bg);
+   color: var(--text-main);
+   line-height: 1.5;
+   text-align: center;
+ }
+ .container {
+   background: var(--card-bg);
+   width: 100%;
+   max-width: 1100px;
+   margin: 10px auto 40px auto;
+   padding: 20px;
+   border-radius: 12px;
+   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+ }
+ h1, h2, h3, h4 { margin-top: 0; color: #111; }
+ .btn-group {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 10px;
+   margin: 15px 0;
+   justify-content: center;
+ }
+ button, .btn-link {
+   flex: 1 1 calc(50% - 10px);
+   min-width: 140px;
+   padding: 12px 18px;
+   font-size: 14px;
+   font-weight: bold;
+   cursor: pointer;
+   border: none;
+   border-radius: 8px;
+   transition: all 0.2s ease;
+   text-align: center;
+   display: inline-block;
+ }
+ @media (min-width: 768px) {
+   body { padding: 30px; }
+   .container { padding: 40px; }
+   button, .btn-link { flex: 0 1 auto; }
+ }
+ button:disabled {
+   background: #ccc !important;
+   cursor: not-allowed;
+   transform: none !important;
+ }
+ .top-nav {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 8px;
+   background: var(--card-bg);
+   padding: 12px 15px;
+   border-radius: 10px;
+   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+   margin: 10px auto 20px auto;
+   width: 100%;
+   max-width: 1100px;
+   align-items: center;
+   justify-content: center;
+ }
+ .top-nav a {
+   text-decoration: none;
+   color: var(--text-main);
+   font-size: 13px;
+   font-weight: 600;
+   padding: 8px 14px;
+   border-radius: 6px;
+   transition: all 0.2s ease-in-out;
+   background: var(--dark-bg);
+   display: flex;
+   align-items: center;
+   gap: 6px;
+ }
+ .top-nav a:hover {
+   background: var(--primary-color);
+   color: white;
+   transform: translateY(-2px);
+ }
+ .top-nav a.nav-home { background: #333; color: white; }
+ .top-nav a.nav-home:hover { background: #111; }
+ .top-nav a.nav-logout { background: #dc3545; color: white; margin-left: auto; }
+ .top-nav a.nav-logout:hover { background: #c82333; }
+ @media (min-width: 768px) {
+   .top-nav { justify-content: flex-start; padding: 15px 25px; gap: 12px; }
+   .top-nav a { font-size: 14px; padding: 10px 16px; }
+ }
+ .mode-subtitle {
+   text-align: center;
+   color: #666;
+   margin-bottom: 24px;
+   font-size: 14px;
+ }
+ .grid {
+   display: grid;
+   grid-template-columns: 1fr;
+   gap: 20px;
+   margin: 25px 0 30px 0;
+ }
  @media (min-width: 576px) { .grid { grid-template-columns: repeat(2, 1fr); } }
  @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } }
  .card {
