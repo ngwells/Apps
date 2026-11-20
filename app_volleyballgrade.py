@@ -1,5 +1,5 @@
 import datetime, io, json, math, os, re, base64, random, secrets, hashlib
-from flask import Flask, jsonify, request, render_template_string, session, redirect, url_for
+from flask import Flask, jsonify, request, render_template_string, session, redirect, url_for, send_file
 from flask_caching import Cache
 from mistralai.client import Mistral
 import numpy as np
@@ -346,7 +346,6 @@ def verify_2fa():
 @app.route("/logout")
 def logout():
     session.clear()
-    cache.clear()
     return redirect(url_for("login"))
 
 @app.route("/reset-password", methods=["POST"])
@@ -371,9 +370,9 @@ def reset_password():
 # --- Protected Routes ---
 @app.route("/")
 def index():
-    if "user_id" not in session: 
+    if "user_id" not in session:
         return redirect(url_for("login"))
-    return render_template_string(LANDING_PAGE_HTML)
+    return render_template_string(LANDING_PAGE_HTML, shared_nav=SHARED_NAV)
 
 @app.route("/system/reset-session", methods=["POST"])
 def reset_session():
@@ -382,21 +381,170 @@ def reset_session():
     session.clear(); cache.clear()
     return jsonify({"status": "cleared"})
 
-@app.route("/soccer-grade")
-def soccer_grade():
-    if "user_id" not in session: 
+# --- Mode & Local Session Management Routes ---
+
+# --- Mode & Local Session Management Routes ---
+@app.route("/start-mode/<mode_name>", methods=["GET"])
+def start_mode(mode_name):
+    if "user_id" not in session:
         return redirect(url_for("login"))
-    raw_records = cache.get('cached_raw') or []
-    processed_records = cache.get('cached_processed') or []
+
+    valid_modes = {
+        "tryout": "TryOut Mode",
+        "practice": "Practice Mode",
+        "postgame": "Post Game Mode",
+    }
+    if mode_name not in valid_modes:
+        return redirect(url_for("index"))
+
+    session["active_mode"] = valid_modes[mode_name]
+    session["active_mode_slug"] = mode_name
+
+    # Only clear cache when explicitly creating a brand-new session (?new=1)
+    if request.args.get("new") == "1":
+        cache.set("cached_raw", [])
+        cache.set("cached_processed", [])
+
+    if mode_name == "tryout":
+        return redirect(url_for("tryout_mode"))
+    elif mode_name == "practice":
+        return redirect(url_for("practice_mode"))
+    else:
+        return redirect(url_for("postgame_mode"))
+
+
+@app.route("/tryout-mode", methods=["GET"])
+def tryout_mode():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    session["active_mode"] = "TryOut Mode"
+    session["active_mode_slug"] = "tryout"
+    raw_records = cache.get("cached_raw") or []
+    processed_records = cache.get("cached_processed") or []
+
     return render_template_string(
-        SOCCER_INTERFACE_HTML,
+        TRYOUT_MODE_HTML,
+        shared_nav=SHARED_NAV,
+        active_mode="TryOut Mode",
         has_raw=len(raw_records) > 0,
         has_processed=len(processed_records) > 0,
         raw_records=raw_records,
         processed_records=processed_records,
         raw_records_json=json.dumps(raw_records),
-        processed_records_json=json.dumps(processed_records)
+        processed_records_json=json.dumps(processed_records),
     )
+
+
+@app.route("/practice-mode", methods=["GET"])
+def practice_mode():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    session["active_mode"] = "Practice Mode"
+    session["active_mode_slug"] = "practice"
+    return render_template_string(
+        PRACTICE_MODE_HTML,
+        shared_nav=SHARED_NAV,
+        active_mode="Practice Mode",
+    )
+
+
+@app.route("/postgame-mode", methods=["GET"])
+def postgame_mode():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    session["active_mode"] = "Post Game Mode"
+    session["active_mode_slug"] = "postgame"
+    return render_template_string(
+        POSTGAME_MODE_HTML,
+        shared_nav=SHARED_NAV,
+        active_mode="Post Game Mode",
+    )
+
+
+@app.route("/export-session", methods=["GET"])
+def export_session():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    active_mode = session.get("active_mode", "TryOut Mode")
+    session_bundle = {
+        "app": "evalbricks",
+        "version": "1.0",
+        "mode": active_mode,
+        "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "cached_raw": cache.get("cached_raw") or [],
+        "cached_processed": cache.get("cached_processed") or [],
+    }
+
+    buffer = io.BytesIO()
+    buffer.write(json.dumps(session_bundle, indent=2).encode("utf-8"))
+    buffer.seek(0)
+
+    mode_slug = active_mode.lower().replace(" ", "_")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"evalbricks_{mode_slug}_{timestamp}.json"
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/json",
+    )
+
+
+@app.route("/import-session", methods=["POST"])
+def import_session():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    if "session_file" not in request.files:
+        return jsonify({"error": "No file selected"}), 400
+
+    file = request.files["session_file"]
+    expected_mode = request.form.get("expected_mode", "")
+
+    try:
+        bundle = json.load(file)
+        if bundle.get("app") != "evalbricks":
+            return jsonify({"error": "Invalid EvalBricks session file."}), 400
+
+        loaded_mode = bundle.get("mode") or expected_mode or "TryOut Mode"
+        session["active_mode"] = loaded_mode
+
+        cache.set("cached_raw", bundle.get("cached_raw", []))
+        cache.set("cached_processed", bundle.get("cached_processed", []))
+
+        mode_route_map = {
+            "TryOut Mode": url_for("tryout_mode"),
+            "Practice Mode": url_for("practice_mode"),
+            "Post Game Mode": url_for("postgame_mode"),
+        }
+        redirect_url = mode_route_map.get(loaded_mode, url_for("tryout_mode"))
+        return jsonify({"status": "success", "redirect": redirect_url})
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse session file: {str(e)}"}), 400
+
+@app.route("/soccer-grade")
+def soccer_grade():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    raw_records = cache.get("cached_raw") or []
+    processed_records = cache.get("cached_processed") or []
+    active_mode = session.get("active_mode", "TryOut Mode")
+    return render_template_string(
+        SOCCER_INTERFACE_HTML,
+        shared_nav=SHARED_NAV,
+        active_mode=active_mode,
+        has_raw=len(raw_records) > 0,
+        has_processed=len(processed_records) > 0,
+        raw_records=raw_records,
+        processed_records=processed_records,
+        raw_records_json=json.dumps(raw_records),
+        processed_records_json=json.dumps(processed_records),
+    )
+
 
 @app.route("/soccer-grade/sync-raw", methods=["POST"])
 def sync_raw():
@@ -1321,15 +1469,14 @@ VERIFY_2FA_PAGE_HTML = """
 """
 
 SHARED_CSS = """
-<script async src="[https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E](https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E)"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-W0VN6S115E"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
   gtag('config', 'G-W0VN6S115E');
 </script>
-<script async src="[https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369](https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369)" crossorigin="anonymous"></script>
-<style>
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7701989446566369" crossorigin="anonymous"></script>
  :root {--primary-color: #007bff; --success-color: #28a745; --danger-color: #dc3545; --info-color: #17a2b8; --purple-color: #6f42c1; --dark-bg: #f4f6f9; --card-bg: #ffffff; --text-main: #333333; }
  * { box-sizing: border-box; }
  body {font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: var(--dark-bg); color: var(--text-main); line-height: 1.5; }
@@ -1370,76 +1517,394 @@ SHARED_NAV = """
 </nav>
 """
 
-LANDING_PAGE_HTML = """<!DOCTYPE html> 
-<html lang="en"> 
-<head> 
-<meta charset="UTF-8"> 
-<meta name="viewport" content="width=device-width, initial-scale=1.0"> 
-<title>Application Hub</title> 
-""" + SHARED_CSS + """ 
-<style> 
- body { text-align: center; } 
- .grid {display: grid; grid-template-columns: 1fr; gap: 20px; margin: 30px 0; } 
- @media (min-width: 576px) { .grid { grid-template-columns: repeat(2, 1fr); } } 
- @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } } 
- .card {background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; transition: transform 0.2s, box-shadow 0.2s; text-decoration: none; color: inherit; display: flex; flex-direction: column; justify-content: space-between; border-top: 4px solid var(--primary-color); } 
- .card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); } 
- .card h3 { margin-bottom: 10px; color: #222; font-size: 18px; } 
- .card p { color: #555; font-size: 13px; line-height: 1.5; margin-bottom: 20px; } 
- .badge {display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-weight: bold; align-self: flex-start; } 
- .system-controls { margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px; } 
- .btn-reset-all { background: #6c757d; color: white; width: 100%; max-width: 300px; } 
-</style> 
-</head> 
-<body> 
-""" + SHARED_NAV + """
-<div class="container"> 
-    <h1>Data & Voice Automation Suite</h1> 
-    <p style="color:#666;">Select an engine interface workflow layout environment below:</p> 
-    <div class="grid"> 
-        <a href="/soccer-grade" class="card" style="border-top-color: var(--danger-color)"> 
-            <div> 
-                <h3>1. Voice Logger</h3> 
-                <p>Voice-to-text logging assistant featuring automated player-by-player row splitting.</p> 
-            </div> 
-            <span class="badge">Voice Input</span> 
-        </a> 
-        <a href="/upload-manager" class="card" style="border-top-color: var(--primary-color)"> 
-            <div> 
-                <h3>2. Data Manager</h3> 
-                <p>Upload external metrics data or spreadsheets and manage session assets.</p> 
-            </div> 
-            <span class="badge">File Processing</span> 
-        </a> 
-        <a href="/create-lineup" class="card" style="border-top-color: #ffc107"> 
-            <div> 
-                <h3>3. Create Line Up</h3> 
-                <p>Build and arrange tactical team lineups utilizing active roster data templates.</p> 
-            </div> 
-            <span class="badge">Tactics</span> 
-        </a> 
-        <a href="/analytics" class="card" style="border-top-color: var(--success-color)"> 
-            <div> 
-                <h3>4. Analytics</h3> 
-                <p>Review raw files, processed logs, and uploaded metrics dashboards side by side.</p> 
-            </div> 
-            <span class="badge">Insights</span> 
-        </a> 
-    </div> 
-    <div class="system-controls"> 
-        <button class="btn-reset-all" onclick="clearFullSession()">Reset Environment Roster Cache</button> 
-    </div> 
-</div> 
-<script> 
-function clearFullSession() {
-    if (confirm("Are you sure you want to completely flush all loaded dataframes and generated files?")) {
-        fetch('/system/reset-session', { method: 'POST' }) 
-        .then(() => { alert("Cache context cleared successfully."); window.location.reload(); }); 
-    } 
-} 
-</script> 
-</body> 
-</html>"""
+SESSION_TOP_BAR_HTML = """
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; max-width: 1100px; margin: 12px auto 16px auto; padding: 12px 18px; background: #0f172a; color: #f8fafc; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="color: #94a3b8; font-size: 0.85rem; font-weight: 500;">Active Mode:</span>
+        <span style="background: rgba(37, 99, 235, 0.2); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.45); padding: 4px 12px; border-radius: 999px; font-size: 0.85rem; font-weight: 700;">
+            {{ active_mode }}
+        </span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
+        <a href="/" style="color: #cbd5e1; background: #1e293b; border: 1px solid #334155; text-decoration: none; font-size: 0.85rem; font-weight: 600; padding: 7px 13px; border-radius: 6px;">
+            Mode Hub
+        </a>
+        <button type="button" onclick="triggerTopBarLoad()" style="color: #e2e8f0; background: #1e293b; border: 1px solid #475569; font-size: 0.85rem; font-weight: 600; padding: 7px 13px; border-radius: 6px; cursor: pointer;">
+            📂 Load Session
+        </button>
+        <a href="/export-session" style="background: #2563eb; color: #ffffff; text-decoration: none; font-size: 0.85rem; font-weight: 700; padding: 7px 15px; border-radius: 6px;">
+            💾 Save Session
+        </a>
+        <input type="file" id="topBarSessionFile" accept=".json" style="display: none;" onchange="handleTopBarSessionUpload(event)">
+    </div>
+</div>
+<script>
+function triggerTopBarLoad() {
+    const input = document.getElementById('topBarSessionFile');
+    if (input) input.click();
+}
+async function handleTopBarSessionUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('session_file', file);
+    formData.append('expected_mode', '{{ active_mode }}');
+    try {
+        const res = await fetch('/import-session', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok && data.redirect) {
+            window.location.href = data.redirect;
+        } else {
+            alert(data.error || 'Could not load session file.');
+        }
+    } catch (err) {
+        alert('Error uploading session file: ' + err.message);
+    } finally {
+        event.target.value = '';
+    }
+}
+</script>
+"""
+
+LANDING_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvalBricks | Select Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #0b1120;
+            --card-bg: #111827;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary-color: #2563eb;
+            --primary-hover: #1d4ed8;
+            --border-color: rgba(148, 163, 184, 0.2);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 24px auto;
+        }
+        .header {
+            margin-bottom: 28px;
+        }
+        .header h1 {
+            margin: 0 0 8px 0;
+            font-size: 1.9rem;
+            font-weight: 700;
+        }
+        .header h1 span { color: var(--primary-color); }
+        .header p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 0.98rem;
+        }
+        .mode-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+            gap: 20px;
+        }
+        .mode-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 22px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 18px;
+        }
+        .mode-badge {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #60a5fa;
+            background: rgba(37, 99, 235, 0.16);
+            border: 1px solid rgba(96, 165, 250, 0.35);
+            padding: 4px 10px;
+            border-radius: 999px;
+            margin-bottom: 12px;
+        }
+        .mode-card h2 {
+            margin: 0 0 8px 0;
+            font-size: 1.25rem;
+        }
+        .mode-card p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .mode-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .btn-primary {
+            display: block;
+            text-align: center;
+            text-decoration: none;
+            background: var(--primary-color);
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.9rem;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-secondary {
+            display: block;
+            text-align: center;
+            background: #1e293b;
+            color: #e2e8f0;
+            font-weight: 600;
+            font-size: 0.9rem;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            cursor: pointer;
+        }
+        .btn-secondary:hover { background: #273549; }
+    </style>
+</head>
+<body>
+    {{ shared_nav | safe }}
+    <div class="container">
+        <div class="header">
+            <h1>Eval<span>Bricks</span> Workspace Modes</h1>
+            <p>Choose a mode below to start a brand-new session or load a previously saved session from your local drive.</p>
+        </div>
+
+        <div class="mode-grid">
+            <div class="mode-card">
+                <div>
+                    <span class="mode-badge">Active Workspace</span>
+                    <h2>TryOut Mode</h2>
+                    <p>Full tryout evaluation workspace with all original landing/evaluation tools, logging, and data workflows intact.</p>
+                </div>
+                <div class="mode-actions">
+                    <a href="/start-mode/tryout?new=1" class="btn-primary">+ Create New Session</a>
+                    <button type="button" class="btn-secondary" onclick="openModeSessionPicker('TryOut Mode')">📂 Load Previous Session</button>
+                </div>
+            </div>
+
+            <div class="mode-card">
+                <div>
+                    <span class="mode-badge">Placeholder</span>
+                    <h2>Practice Mode</h2>
+                    <p>Blank placeholder page ready for future Practice Mode workflows. Supports session creation and local session loading.</p>
+                </div>
+                <div class="mode-actions">
+                    <a href="/start-mode/practice?new=1" class="btn-primary">+ Create New Session</a>
+                    <button type="button" class="btn-secondary" onclick="openModeSessionPicker('Practice Mode')">📂 Load Previous Session</button>
+                </div>
+            </div>
+
+            <div class="mode-card">
+                <div>
+                    <span class="mode-badge">Placeholder</span>
+                    <h2>Post Game Mode</h2>
+                    <p>Blank placeholder page ready for future Post Game Mode workflows. Supports session creation and local session loading.</p>
+                </div>
+                <div class="mode-actions">
+                    <a href="/start-mode/postgame?new=1" class="btn-primary">+ Create New Session</a>
+                    <button type="button" class="btn-secondary" onclick="openModeSessionPicker('Post Game Mode')">📂 Load Previous Session</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="modeSessionInput" accept=".json" style="display: none;" onchange="uploadModeSession(event)">
+    <script>
+        let selectedExpectedMode = 'TryOut Mode';
+        function openModeSessionPicker(modeName) {
+            selectedExpectedMode = modeName;
+            document.getElementById('modeSessionInput').click();
+        }
+        async function uploadModeSession(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('session_file', file);
+            formData.append('expected_mode', selectedExpectedMode);
+            try {
+                const res = await fetch('/import-session', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (res.ok && data.redirect) {
+                    window.location.href = data.redirect;
+                } else {
+                    alert(data.error || 'Failed to load session.');
+                }
+            } catch (err) {
+                alert('Error loading session: ' + err.message);
+            } finally {
+                event.target.value = '';
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+TRYOUT_MODE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvalBricks | TryOut Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    """ + SHARED_CSS + """
+    <style>
+        body { text-align: center; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 20px; margin: 30px 0; }
+        @media (min-width: 576px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+        .card h3 { margin-bottom: 10px; color: #222; font-size: 18px; }
+        .card p { color: #555; font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+        .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; margin-bottom: 15px; }
+        .system-controls { margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px; }
+        .btn-reset-all { background: #6c757d; color: white; width: 100%; max-width: 300px; }
+    </style>
+</head>
+<body>
+    {{ shared_nav | safe }}
+""" + SESSION_TOP_BAR_HTML + """
+    <div class="container">
+        <h1>EvalBricks TryOut Mode</h1>
+        <p style="color:#555;">Active evaluation hub. Raw records: {{ raw_records | length }} | Processed records: {{ processed_records | length }}</p>
+        <div class="grid">
+            <div class="card">
+                <span class="badge">Workspace</span>
+                <h3>Evaluation Grid</h3>
+                <p>Grade athletes and manage live tryout evaluations.</p>
+                <a href="/soccer-grade" class="btn-link" style="background:var(--primary-color);color:#fff;text-decoration:none;">Open Workspace</a>
+            </div>
+            <div class="card">
+                <span class="badge">Data</span>
+                <h3>Upload Manager</h3>
+                <p>Import and sync raw roster and evaluation files.</p>
+                <a href="/upload-manager" class="btn-link" style="background:var(--info-color);color:#fff;text-decoration:none;">Open Uploader</a>
+            </div>
+            <div class="card">
+                <span class="badge">Roster</span>
+                <h3>Line Up Builder</h3>
+                <p>Organize player lineups and court/field positions.</p>
+                <a href="/create-lineup" class="btn-link" style="background:var(--purple-color);color:#fff;text-decoration:none;">Open Line Ups</a>
+            </div>
+            <div class="card">
+                <span class="badge">Insights</span>
+                <h3>Analytics</h3>
+                <p>Review performance summaries and evaluation metrics.</p>
+                <a href="/analytics" class="btn-link" style="background:var(--success-color);color:#fff;text-decoration:none;">View Analytics</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+PRACTICE_MODE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvalBricks | Practice Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #0b1120;
+            --card-bg: #111827;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary-color: #2563eb;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .placeholder-box {
+            max-width: 1100px;
+            margin: 24px auto;
+            min-height: 55vh;
+            background: var(--card-bg);
+            border: 1px dashed rgba(148, 163, 184, 0.3);
+            border-radius: 14px;
+            padding: 32px;
+        }
+    </style>
+</head>
+<body>
+    {{ shared_nav | safe }}
+""" + SESSION_TOP_BAR_HTML + """
+    <div class="placeholder-box"></div>
+</body>
+</html>
+"""
+
+POSTGAME_MODE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EvalBricks | Post Game Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #0b1120;
+            --card-bg: #111827;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary-color: #2563eb;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .placeholder-box {
+            max-width: 1100px;
+            margin: 24px auto;
+            min-height: 55vh;
+            background: var(--card-bg);
+            border: 1px dashed rgba(148, 163, 184, 0.3);
+            border-radius: 14px;
+            padding: 32px;
+        }
+    </style>
+</head>
+<body>
+    {{ shared_nav | safe }}
+""" + SESSION_TOP_BAR_HTML + """
+    <div class="placeholder-box"></div>
+</body>
+</html>
+"""
 
 SOCCER_INTERFACE_HTML = """<!DOCTYPE html> 
 <html lang="en"> 
@@ -1467,6 +1932,7 @@ SOCCER_INTERFACE_HTML = """<!DOCTYPE html>
 </head> 
 <body> 
 """ + SHARED_NAV + """
+""" + SESSION_TOP_BAR_HTML + """
 <div class="container"> 
     <h1 style="text-align:center;">Voice Recorder Logger</h1> 
     <p style="text-align:center; color:#666;">Click "Start Recording" to open your mic, and "Stop & Process" to transcribe.</p> 
