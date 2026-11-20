@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 import plotly.graph_objects as go
-import plotly.express as px
+import plotly.express as pxEvalbrin
 import gc
 
 # Google Gmail API imports
@@ -1676,10 +1676,38 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
             cursor: pointer;
         }
         .btn-secondary:hover { background: #273549; }
-    </style>
-</head>
-<body>
-    {{ shared_nav | safe }}
+            .modes-topbar {
+      width: 100%;
+      max-width: 1100px;
+      margin: 0 auto 14px auto;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .btn-logout-mode {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #1e293b;
+      color: #f8fafc;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .btn-logout-mode:hover {
+      background: #273549;
+      border-color: #475569;
+    }
+        </style>
+    </head>
+    <body>
+    <div class="modes-topbar">
+    <a href="/logout" class="btn-logout-mode">🚪 Log Out</a>
+    </div>
     <div class="container">
         <div class="header">
             <h1>Eval<span>Bricks</span> Workspace Modes</h1>
