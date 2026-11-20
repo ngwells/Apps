@@ -413,26 +413,22 @@ def start_mode(mode_name):
         return redirect(url_for("postgame_mode"))
 
 
-@app.route("/tryout-mode", methods=["GET"])
+@app.route("/tryout-mode")
 def tryout_mode():
     if "user_id" not in session:
         return redirect(url_for("login"))
-
     session["active_mode"] = "TryOut Mode"
-    session["active_mode_slug"] = "tryout"
-    raw_records = cache.get("cached_raw") or []
-    processed_records = cache.get("cached_processed") or []
-
+    raw_session = cache.get("cached_raw") or []
+    processed_session = cache.get("cached_processed") or []
+    uploaded_session = cache.get("cached_uploaded") or []
     return render_template_string(
         TRYOUT_MODE_HTML,
         shared_nav=SHARED_NAV,
-        active_mode="TryOut Mode",
-        has_raw=len(raw_records) > 0,
-        has_processed=len(processed_records) > 0,
-        raw_records=raw_records,
-        processed_records=processed_records,
-        raw_records_json=json.dumps(raw_records),
-        processed_records_json=json.dumps(processed_records),
+        session_top_bar=SESSION_TOP_BAR_HTML,
+        active_mode=session["active_mode"],
+        raw_count=len(raw_session),
+        processed_count=len(processed_session),
+        uploaded_count=len(uploaded_session),
     )
 
 
@@ -1764,104 +1760,139 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
 TRYOUT_MODE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EvalBricks | TryOut Mode</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    """ + SHARED_CSS + """
-    <style>
-        body { text-align: center; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 20px; margin: 30px 0; }
-        @media (min-width: 576px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-        @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } }
-        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-        .card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-        .card h3 { margin-bottom: 10px; color: #222; font-size: 18px; }
-        .card p { color: #555; font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
-        .badge { display: inline-block; background: #e1ecf4; color: #39739d; font-size: 11px; padding: 4px 8px; border-radius: 4px; margin-bottom: 15px; }
-        .system-controls { margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px; }
-        .btn-reset-all { background: #6c757d; color: white; width: 100%; max-width: 300px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvalBricks | TryOut Mode</title>
+""" + SHARED_CSS + """
+<style>
+ body { text-align: center; }
+ .mode-subtitle { text-align: center; color: #666; margin-bottom: 24px; font-size: 14px; }
+ .grid { display: grid; grid-template-columns: 1fr; gap: 20px; margin: 25px 0 30px 0; }
+ @media (min-width: 576px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+ @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+ .card {
+   background: white;
+   padding: 25px;
+   border-radius: 12px;
+   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+   text-align: left;
+   transition: transform 0.2s, box-shadow 0.2s;
+   text-decoration: none;
+   color: inherit;
+   display: flex;
+   flex-direction: column;
+   justify-content: space-between;
+   border-top: 4px solid var(--primary-color);
+ }
+ .card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+ .card h3 { margin-bottom: 10px; color: #222; font-size: 18px; }
+ .card p { color: #555; font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+ .badge {
+   display: inline-block;
+   background: #e1ecf4;
+   color: #39739d;
+   font-size: 11px;
+   padding: 4px 8px;
+   border-radius: 4px;
+   font-weight: bold;
+   align-self: flex-start;
+ }
+ .system-controls {
+   margin-top: 35px;
+   border-top: 1px solid #ddd;
+   padding-top: 20px;
+   display: flex;
+   flex-wrap: wrap;
+   gap: 12px;
+   justify-content: center;
+ }
+ .btn-reset-all {
+   background: #6c757d;
+   color: white;
+   width: 100%;
+   max-width: 300px;
+ }
+ .debug-panel {
+   background: #f1f3f5;
+   border-radius: 8px;
+   padding: 15px;
+   font-size: 12px;
+   margin-top: 25px;
+   text-align: left;
+ }
+</style>
 </head>
 <body>
-    {{ shared_nav | safe }}
+""" + SHARED_NAV + """
 """ + SESSION_TOP_BAR_HTML + """
-    <div class="container">
-        <h1>EvalBricks TryOut Mode</h1>
-        <p style="color:#555;">Active evaluation hub. Raw records: {{ raw_records | length }} | Processed records: {{ processed_records | length }}</p>
-        <div class="grid">
-            <div class="card">
-                <span class="badge">Workspace</span>
-                <h3>Evaluation Grid</h3>
-                <p>Grade athletes and manage live tryout evaluations.</p>
-                <a href="/soccer-grade" class="btn-link" style="background:var(--primary-color);color:#fff;text-decoration:none;">Open Workspace</a>
-            </div>
-            <div class="card">
-                <span class="badge">Data</span>
-                <h3>Upload Manager</h3>
-                <p>Import and sync raw roster and evaluation files.</p>
-                <a href="/upload-manager" class="btn-link" style="background:var(--info-color);color:#fff;text-decoration:none;">Open Uploader</a>
-            </div>
-            <div class="card">
-                <span class="badge">Roster</span>
-                <h3>Line Up Builder</h3>
-                <p>Organize player lineups and court/field positions.</p>
-                <a href="/create-lineup" class="btn-link" style="background:var(--purple-color);color:#fff;text-decoration:none;">Open Line Ups</a>
-            </div>
-            <div class="card">
-                <span class="badge">Insights</span>
-                <h3>Analytics</h3>
-                <p>Review performance summaries and evaluation metrics.</p>
-                <a href="/analytics" class="btn-link" style="background:var(--success-color);color:#fff;text-decoration:none;">View Analytics</a>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-"""
+<div class="container">
+    <h1>EvalBricks TryOut Mode</h1>
+    <p class="mode-subtitle">
+        Active evaluation hub. Raw records: <strong>{{ raw_count|default(0) }}</strong> |
+        Processed records: <strong>{{ processed_count|default(0) }}</strong>
+    </p>
 
-PRACTICE_MODE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EvalBricks | Practice Mode</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --dark-bg: #0b1120;
-            --card-bg: #111827;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --primary-color: #2563eb;
-        }
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: 'Inter', sans-serif;
-            background: var(--dark-bg);
-            color: var(--text-main);
-            min-height: 100vh;
-            padding: 16px;
-        }
-        .placeholder-box {
-            max-width: 1100px;
-            margin: 24px auto;
-            min-height: 55vh;
-            background: var(--card-bg);
-            border: 1px dashed rgba(148, 163, 184, 0.3);
-            border-radius: 14px;
-            padding: 32px;
-        }
-    </style>
-</head>
-<body>
-    {{ shared_nav | safe }}
-""" + SESSION_TOP_BAR_HTML + """
-    <div class="placeholder-box"></div>
+    <div class="grid">
+        <a href="/soccer-grade" class="card" style="border-top-color: var(--danger-color)">
+            <div>
+                <h3>1. Voice Logger</h3>
+                <p>Voice-to-text logging assistant featuring automated player-by-player row splitting.</p>
+            </div>
+            <span class="badge">Voice Input</span>
+        </a>
+
+        <a href="/upload-manager" class="card" style="border-top-color: var(--primary-color)">
+            <div>
+                <h3>2. Data Manager</h3>
+                <p>Upload external metrics data or spreadsheets and manage session assets.</p>
+            </div>
+            <span class="badge">File Processing</span>
+        </a>
+
+        <a href="/create-lineup" class="card" style="border-top-color: #ffc107">
+            <div>
+                <h3>3. Create Line Up</h3>
+                <p>Build and arrange tactical team lineups utilizing active roster data templates.</p>
+            </div>
+            <span class="badge">Tactics</span>
+        </a>
+
+        <a href="/analytics" class="card" style="border-top-color: var(--success-color)">
+            <div>
+                <h3>4. Analytics</h3>
+                <p>Review raw files, processed logs, and uploaded metrics dashboards side by side.</p>
+            </div>
+            <span class="badge">Insights</span>
+        </a>
+    </div>
+
+    <div class="system-controls">
+        <button type="button" class="btn-reset-all" onclick="clearFullSession()">Reset Environment Roster Cache</button>
+    </div>
+
+    <div class="debug-panel">
+        <h4 style="margin:0;">Session Context:</h4>
+        <ul style="margin: 5px 0 0 0; padding-left: 20px;">
+            <li>Raw Rows Array: {{ raw_count|default(0) }}</li>
+            <li>Exploded Rows Array: {{ processed_count|default(0) }}</li>
+            <li>Uploaded Matrix Metrics: {{ uploaded_count|default(0) }}</li>
+        </ul>
+    </div>
+</div>
+<script>
+function clearFullSession() {
+    if (confirm("Are you sure you want to completely flush all loaded dataframes and generated files?")) {
+        fetch('/system/reset-session', { method: 'POST' })
+            .then(res => res.json())
+            .then(() => {
+                alert("Cache context cleared successfully.");
+                window.location.reload();
+            });
+    }
+}
+</script>
 </body>
-</html>
-"""
+</html>"""
 
 POSTGAME_MODE_HTML = """<!DOCTYPE html>
 <html lang="en">
